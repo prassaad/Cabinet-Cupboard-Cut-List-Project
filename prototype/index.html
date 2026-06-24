@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cabinet &amp; Cupboard Cut List — Prototype</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Cabinet &amp; Cupboard Cut List <span class="tag">prototype</span></h1>
+    <div class="top-actions">
+      <div class="unit-toggle" role="group" aria-label="Units">
+        <button id="unit-mm" class="active" type="button">mm</button>
+        <button id="unit-in" type="button">inch</button>
+      </div>
+      <button id="btn-save" type="button">Save</button>
+      <button id="btn-load" type="button">Load</button>
+      <button id="btn-reset" type="button" class="ghost">Reset</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT: SIZES + COMPONENTS -->
+    <aside class="panel left">
+      <section class="card">
+        <h2>Sizes <small class="unit-label">(mm)</small></h2>
+        <label>Type
+          <select id="in-preset">
+            <option value="base">Base</option>
+            <option value="wall">Wall</option>
+            <option value="tall">Tall</option>
+            <option value="custom">Custom</option>
+          </select>
+        </label>
+        <label>Height <input id="in-h" type="number" min="1" step="1" /></label>
+        <label>Width  <input id="in-w" type="number" min="1" step="1" /></label>
+        <label>Depth  <input id="in-d" type="number" min="1" step="1" /></label>
+        <label>Material thickness <input id="in-t" type="number" min="1" step="1" /></label>
+        <label class="checkbox"><input id="in-back" type="checkbox" checked /> Include back panel</label>
+      </section>
+
+      <section class="card" id="card-components">
+        <h2>Components</h2>
+        <div class="btn-row">
+          <button id="btn-add-shelf" type="button">+ Shelf</button>
+          <button id="btn-add-divider" type="button">+ Divider</button>
+        </div>
+        <button id="btn-delete" type="button" class="ghost full" disabled>Delete selected</button>
+        <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/dividers. Drag to move within that cell. In 3D, click a face to select.</p>
+      </section>
+
+      <section class="card hidden" id="card-selected">
+        <h2 id="sel-title">Selected component</h2>
+        <div id="sel-fields"></div>
+        <p id="sel-derived" class="hint"></p>
+        <div class="btn-row" id="sel-actions">
+          <button id="sel-update" type="button">Update</button>
+          <button id="sel-delete" type="button" class="ghost">Delete</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Sheet stock</h2>
+        <label>Sheet width  <input id="in-sw" type="number" min="1" step="1" /></label>
+        <label>Sheet height <input id="in-sh" type="number" min="1" step="1" /></label>
+        <label>Saw kerf <input id="in-kerf" type="number" min="0" step="0.1" /></label>
+        <label class="checkbox"><input id="in-grain" type="checkbox" /> Lock grain (no rotation)</label>
+      </section>
+
+      <section class="card">
+        <h2>Fronts / doors</h2>
+        <label>Doors
+          <select id="in-doors">
+            <option value="0">None</option>
+            <option value="1">1 door</option>
+            <option value="2">2 doors</option>
+          </select>
+        </label>
+        <label>Reveal gap <input id="in-reveal" type="number" min="0" step="0.5" /></label>
+      </section>
+
+      <section class="card">
+        <h2>Edge banding <small>L=length · W=width edges</small></h2>
+        <div id="band-grid" class="band-grid"></div>
+      </section>
+    </aside>
+
+    <!-- CENTER: CANVAS TABS -->
+    <section class="center">
+      <div class="tabs">
+        <button class="tab active" data-tab="design" type="button">Design</button>
+        <button class="tab" data-tab="sheet" type="button">Sheet layout</button>
+        <div class="view-toggle" id="view-toggle" role="group" aria-label="View">
+          <button id="v2d" class="active" type="button" title="2D view" aria-label="2D view">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="1.5" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="9" y1="9" x2="9" y2="21" />
+            </svg>
+          </button>
+          <button id="v3d" type="button" title="3D view" aria-label="3D view">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 2 L21 7 V17 L12 22 L3 17 V7 Z" />
+              <path d="M12 2 L12 12 M12 12 L21 7 M12 12 L3 7" />
+            </svg>
+          </button>
+        </div>
+        <label class="explode hidden" id="explode-wrap">Explode <input id="in-explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
+        <label class="explode hidden" id="dims-wrap">Dimensions <span class="switch"><input id="in-dims" type="checkbox" checked /><span class="slider"></span></span></label>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="design-canvas" class="view active"></canvas>
+        <canvas id="sheet-canvas" class="view"></canvas>
+      </div>
+      <div id="sheet-stats" class="stats hidden"></div>
+    </section>
+
+    <!-- RIGHT: CUTLIST -->
+    <aside class="panel right">
+      <section class="card grow">
+        <h2>Cut list</h2>
+        <div class="table-wrap">
+          <table id="cutlist">
+            <thead>
+              <tr><th>Part</th><th>Qty</th><th>Length</th><th>Width</th><th>Edges</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="cutlist-summary" class="summary"></div>
+        <div class="btn-row">
+          <button id="btn-export" type="button">Export CSV</button>
+          <button id="btn-pdf" type="button">Export PDF</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <!-- AI DESIGN COPILOT -->
+  <button id="ai-fab" type="button" title="Design Copilot" aria-label="Open Design Copilot">✦ Assistant</button>
+  <section id="ai-panel" class="ai-panel hidden" aria-label="Design Copilot">
+    <header class="ai-head">
+      <span class="ai-title">✦ Design Copilot</span>
+      <div class="ai-head-actions">
+        <button id="ai-clear" type="button" title="Clear chat">Clear</button>
+        <button id="ai-close" type="button" aria-label="Close">✕</button>
+      </div>
+    </header>
+    <div id="ai-log" class="ai-log"></div>
+    <form id="ai-form" class="ai-form">
+      <textarea id="ai-input" rows="2" placeholder="e.g. Make a 1800×2100 wardrobe, 2 doors, 5 shelves on the right — then what will it cost?"></textarea>
+      <button id="ai-send" type="submit">Send</button>
+    </form>
+  </section>
+
+  <script src="app.js"></script>
+  <script src="ai.js"></script>
+</body>
+</html>

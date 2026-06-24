@@ -1,0 +1,10 @@
+{
+  "name": "cabinet-cutlist-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static server + Claude proxy for the Cabinet Cut List Design Copilot",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

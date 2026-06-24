@@ -1,0 +1,9 @@
+{
+  "[github.copilot-chat]": {
+    "chat.localSkillsEnabled": true
+  },
+  "github.copilot.chat.localsSkillsPath": ".copilot",
+  "files.exclude": {
+    "**/.copilot": false
+  }
+}
