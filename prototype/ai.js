@@ -10,9 +10,9 @@ You can READ and MODIFY a single cabinet design by calling tools.
 
 Conventions:
 - All dimensions are in millimetres unless the user clearly says inches (then convert to mm yourself before calling tools).
-- A cabinet has width, height, depth and material thickness. It may have a back panel, up to 2 doors, plus internal shelves (horizontal) and dividers (vertical).
-- "Evenly spaced" shelves/dividers: just call add_shelves / add_dividers with the count; spacing is automatic.
-- To confine shelves to a bay between two dividers, pass from_mm/to_mm (X range). To confine dividers to a vertical band, pass from_mm/to_mm (Y range).
+- A cabinet has width, height, depth and material thickness. It may have a back panel, up to 2 doors, plus internal shelves (horizontal) and verticals (full-height partitions).
+- "Evenly spaced" shelves/verticals: just call add_shelves / add_verticals with the count; spacing is automatic.
+- To confine shelves to a bay between two verticals, pass from_mm/to_mm (X range). To confine a vertical to a height band, pass from_mm/to_mm (Y range).
 - Before answering a cost or quantity question, call get_cut_list or estimate_bom — never guess numbers.
 - When you change the design, call get_state once at the end if you need to confirm the result.
 
@@ -28,11 +28,11 @@ const TOOLS = [
   fn('apply_preset', 'Apply a size preset.', { type: 'object', properties: { preset: { type: 'string', enum: ['base', 'wall', 'tall'] } }, required: ['preset'] }),
   fn('set_doors', 'Set number of doors (0, 1 or 2) and optional reveal gap in mm.', { type: 'object', properties: { count: { type: 'integer', minimum: 0, maximum: 2 }, reveal: { type: 'number' } }, required: ['count'] }),
   fn('add_shelves', 'Add N evenly spaced horizontal shelves. Optional from_mm/to_mm limit the X span (e.g. one bay).', { type: 'object', properties: { count: { type: 'integer', minimum: 1 }, from_mm: { type: 'number' }, to_mm: { type: 'number' } }, required: ['count'] }),
-  fn('add_dividers', 'Add N evenly spaced vertical dividers. Optional from_mm/to_mm limit the Y span.', { type: 'object', properties: { count: { type: 'integer', minimum: 1 }, from_mm: { type: 'number' }, to_mm: { type: 'number' } }, required: ['count'] }),
-  fn('clear_components', 'Remove all shelves and dividers.', { type: 'object', properties: {} }),
+  fn('add_verticals', 'Add N evenly spaced verticals (full-height partitions). Optional from_mm/to_mm limit the Y span.', { type: 'object', properties: { count: { type: 'integer', minimum: 1 }, from_mm: { type: 'number' }, to_mm: { type: 'number' } }, required: ['count'] }),
+  fn('clear_components', 'Remove all shelves and verticals.', { type: 'object', properties: {} }),
   fn('set_sheet', 'Set sheet stock size and saw kerf (mm).', { type: 'object', properties: { width: { type: 'number' }, height: { type: 'number' }, kerf: { type: 'number' } } }),
   fn('set_grain_lock', 'Lock grain direction (no part rotation when nesting).', { type: 'object', properties: { locked: { type: 'boolean' } }, required: ['locked'] }),
-  fn('set_banding', 'Set which edges get banding for a part type. edges from L1,L2 (length edges) and W1,W2 (width edges).', { type: 'object', properties: { part: { type: 'string', enum: ['Side', 'TopBottom', 'Shelf', 'Divider', 'Door', 'Back'] }, edges: { type: 'array', items: { type: 'string', enum: ['L1', 'L2', 'W1', 'W2'] } } }, required: ['part', 'edges'] }),
+  fn('set_banding', 'Set which edges get banding for a part type. edges from L1,L2 (length edges) and W1,W2 (width edges).', { type: 'object', properties: { part: { type: 'string', enum: ['Side', 'TopBottom', 'Shelf', 'Vertical', 'Door', 'Back'] }, edges: { type: 'array', items: { type: 'string', enum: ['L1', 'L2', 'W1', 'W2'] } } }, required: ['part', 'edges'] }),
 ];
 
 function runTool(name, input) {
@@ -46,7 +46,7 @@ function runTool(name, input) {
       case 'apply_preset': return C.applyPreset(input.preset) ?? { ok: true, state: C.getState() };
       case 'set_doors': C.setDoors(input.count, input.reveal); return { ok: true };
       case 'add_shelves': return C.addShelves(input.count, input.from_mm, input.to_mm);
-      case 'add_dividers': return C.addDividers(input.count, input.from_mm, input.to_mm);
+      case 'add_verticals': return C.addVerticals(input.count, input.from_mm, input.to_mm);
       case 'clear_components': return C.clearComponents();
       case 'set_sheet': C.setSheet(input || {}); return { ok: true };
       case 'set_grain_lock': C.setGrainLock(input.locked); return { ok: true };
@@ -122,7 +122,7 @@ const FLASH = {
   set_sheet: ['in-sw', 'in-sh', 'in-kerf'],
   set_grain_lock: ['in-grain'],
   set_banding: ['band-grid'],
-  add_shelves: ['card-components'], add_dividers: ['card-components'], clear_components: ['card-components'],
+  add_shelves: ['card-components'], add_verticals: ['card-components'], clear_components: ['card-components'],
 };
 function flashEl(el) {
   const t = el.closest('label') || el;

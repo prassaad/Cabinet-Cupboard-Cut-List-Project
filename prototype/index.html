@@ -59,14 +59,14 @@
         <h2>Components</h2>
         <div class="btn-row">
           <button id="btn-add-shelf" type="button">+ Shelf</button>
-          <button id="btn-add-divider" type="button">+ Divider</button>
+          <button id="btn-add-vertical" type="button">+ Vertical</button>
         </div>
         <div class="btn-row drawer-row">
           <button id="btn-add-drawer" type="button">+ Drawers</button>
           <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="3" /></label>
         </div>
         <button id="btn-delete" type="button" class="ghost full" disabled>Delete selected</button>
-        <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/dividers. Drag to move within that cell. In 3D, click a face to select.</p>
+        <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D, click a face to select.</p>
       </section>
 
       <section class="card hidden" id="card-selected">
@@ -97,7 +97,7 @@
         </label>
         <button id="btn-add-door" type="button" class="full">+ Door into cell</button>
         <label>Reveal gap <input id="in-reveal" type="number" min="0" step="0.5" /></label>
-        <p class="hint">Adds a door front to the cell you last clicked, bounded by surrounding shelves/dividers. Select a door to change its leaves or delete it.</p>
+        <p class="hint">Adds a door front to the cell you last clicked, bounded by surrounding shelves/verticals. Select a door to change its leaves or delete it.</p>
       </section>
 
       <section class="card">
