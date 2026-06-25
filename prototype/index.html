@@ -40,11 +40,30 @@
         <label class="checkbox"><input id="in-back" type="checkbox" checked /> Include back panel</label>
       </section>
 
+      <section class="card" id="card-back">
+        <h2>Back panel <small class="unit-label">(mm)</small></h2>
+        <label>Fixing
+          <select id="in-back-type">
+            <option value="groove">Groove / dado</option>
+            <option value="rabbet">Rabbet / rebate</option>
+            <option value="overlay">Full overlay</option>
+          </select>
+        </label>
+        <label>Back thickness <input id="in-back-thk" type="number" min="1" step="1" /></label>
+        <label id="lbl-back-groove">Groove / rebate depth <input id="in-back-groove" type="number" min="0" step="1" /></label>
+        <label id="lbl-back-setback">Setback from rear <input id="in-back-setback" type="number" min="0" step="1" /></label>
+        <p class="hint">Overlay = full panel on the rear. Groove/rabbet = inset panel housed in the carcass; depth = how far it sits into the groove, setback = how far it's recessed from the back.</p>
+      </section>
+
       <section class="card" id="card-components">
         <h2>Components</h2>
         <div class="btn-row">
           <button id="btn-add-shelf" type="button">+ Shelf</button>
           <button id="btn-add-divider" type="button">+ Divider</button>
+        </div>
+        <div class="btn-row drawer-row">
+          <button id="btn-add-drawer" type="button">+ Drawers</button>
+          <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="3" /></label>
         </div>
         <button id="btn-delete" type="button" class="ghost full" disabled>Delete selected</button>
         <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/dividers. Drag to move within that cell. In 3D, click a face to select.</p>
@@ -70,14 +89,15 @@
 
       <section class="card">
         <h2>Fronts / doors</h2>
-        <label>Doors
-          <select id="in-doors">
-            <option value="0">None</option>
+        <label>Leaves
+          <select id="in-door-leaves">
             <option value="1">1 door</option>
             <option value="2">2 doors</option>
           </select>
         </label>
+        <button id="btn-add-door" type="button" class="full">+ Door into cell</button>
         <label>Reveal gap <input id="in-reveal" type="number" min="0" step="0.5" /></label>
+        <p class="hint">Adds a door front to the cell you last clicked, bounded by surrounding shelves/dividers. Select a door to change its leaves or delete it.</p>
       </section>
 
       <section class="card">
@@ -91,6 +111,11 @@
       <div class="tabs">
         <button class="tab active" data-tab="design" type="button">Design</button>
         <button class="tab" data-tab="sheet" type="button">Sheet layout</button>
+        <div class="zoom-ctl hidden" id="zoom-ctl" role="group" aria-label="Zoom">
+          <button id="zoom-out" type="button" title="Zoom out">−</button>
+          <button id="zoom-fit" type="button" title="Fit to view">Fit</button>
+          <button id="zoom-in" type="button" title="Zoom in">+</button>
+        </div>
         <div class="view-toggle" id="view-toggle" role="group" aria-label="View">
           <button id="v2d" class="active" type="button" title="2D view" aria-label="2D view">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

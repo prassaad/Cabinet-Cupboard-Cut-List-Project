@@ -89,6 +89,8 @@ select {
 
 .btn-row { display: flex; gap: 8px; }
 .btn-row button { flex: 1; }
+.drawer-row .qty { display: flex; align-items: center; gap: 6px; color: var(--muted); margin: 0; }
+.drawer-row .qty input { width: 52px; }
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
 
 .card.hidden { display: none; }
@@ -108,6 +110,12 @@ select {
 .view-toggle button svg { display: block; }
 .view-toggle button.active { background: var(--accent); color: #2a1d02; font-weight: 600; }
 .view-toggle.hidden { display: none; }
+
+.zoom-ctl { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-left: 8px; }
+.zoom-ctl button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; cursor: pointer; font: inherit; line-height: 1; }
+.zoom-ctl button:hover { color: var(--ink); background: #ffffff14; }
+.zoom-ctl button + button { border-left: 1px solid var(--line); }
+.zoom-ctl.hidden { display: none; }
 
 .explode { display: flex; align-items: center; gap: 6px; color: var(--muted); margin-left: 10px; font-size: 12px; }
 .explode.hidden { display: none; }
@@ -142,6 +150,8 @@ th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--lin
 th:first-child, td:first-child { text-align: left; }
 thead th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
 tbody tr:hover { background: #ffffff0a; }
+tbody tr.cl-selected { background: #d9a93b2e; box-shadow: inset 3px 0 0 var(--accent); }
+tbody tr.cl-selected td { color: var(--ink); }
 
 .summary { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .summary b { color: var(--ink); }
