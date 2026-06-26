@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>OpenAI API Key</title>
+  <style>
+    body { font: 14px system-ui, -apple-system, Segoe UI, sans-serif; background: #272b33; color: #e6e9ef; margin: 0; padding: 18px; }
+    h1 { font-size: 15px; margin: 0 0 8px; }
+    p { color: #9aa3b2; font-size: 12px; line-height: 1.5; margin: 0 0 12px; }
+    input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid #3b414c; border-radius: 6px; background: #1e2127; color: #e6e9ef; font: inherit; }
+    input:focus { outline: none; border-color: #d9a93b; }
+    .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+    button { padding: 8px 14px; border-radius: 6px; border: 1px solid #3b414c; background: #2f343d; color: #e6e9ef; cursor: pointer; font: inherit; }
+    button.primary { background: #d9a93b; color: #2a1d02; border: 0; font-weight: 600; }
+    .status { color: #5ec27e; font-size: 12px; margin-top: 8px; min-height: 16px; }
+  </style>
+</head>
+<body>
+  <h1>OpenAI API Key <small style="color:#9aa3b2;font-weight:400">(stored on this PC)</small></h1>
+  <p>Used only by the AI copilot. Your key is saved encrypted on this machine and sent directly to OpenAI — never bundled with the app. Leave blank and Save to remove it. The rest of the app works without a key.</p>
+  <input id="key" type="password" placeholder="sk-..." autofocus />
+  <div class="status" id="status"></div>
+  <div class="row">
+    <button id="cancel" type="button">Cancel</button>
+    <button id="save" class="primary" type="button">Save</button>
+  </div>
+  <script src="settings.js"></script>
+</body>
+</html>

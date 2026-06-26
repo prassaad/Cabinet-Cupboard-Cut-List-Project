@@ -1,0 +1,42 @@
+{
+  "name": "cabinet-cutlist-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cabinet & Cupboard Cut List — desktop demo (Electron, offline core + bring-your-own-key AI)",
+  "author": "Kybernete",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.kybernete.cabinetcutlist",
+    "productName": "Cabinet Cut List",
+    "directories": { "output": "dist", "buildResources": "build" },
+    "files": [
+      "main.js",
+      "proxy-server.js",
+      "preload.js",
+      "settings.html",
+      "settings.js",
+      "build/icon.png"
+    ],
+    "extraResources": [
+      { "from": "../prototype", "to": "prototype" }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "portable": { "artifactName": "CabinetCutList-Demo-${version}-portable.exe" },
+    "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "installerIcon": "build/icon.ico", "uninstallerIcon": "build/icon.ico", "artifactName": "CabinetCutList-Setup-${version}.exe" }
+  },
+  "devDependencies": {
+    "electron": "^31.7.6",
+    "electron-builder": "^24.13.3"
+  }
+}
