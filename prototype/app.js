@@ -141,16 +141,27 @@ function doorRects() { const out = []; for (const c of S.comps) if (c.type === '
 // ---------- Drawers ----------
 // A drawer component fills the cell at its anchor (bounded by surrounding shelves/verticals) with `count` stacked fronts.
 const DRAWER = { gap: 3, sideClear: 13, boxHeadClear: 40 };   // mm: reveal around fronts, runner clearance per side, box height clearance
-// The bank sits inside its cell (bounded by shelves/verticals). Optional w/h shrink it; halign places it; it rests on the cell floor.
+// The bank sits inside its cell (bounded by shelves/verticals). Optional w/h shrink it; it is centered horizontally and valign anchors it to the cell top or bottom.
 function drawerRect(c) {
   const cell = cellAt(c.ax, c.ay, null);
   const cw = cell.right - cell.left, ch = cell.top - cell.bottom;
   const W = c.w != null ? Math.max(1, Math.min(c.w, cw)) : cw;
   const H = c.h != null ? Math.max(1, Math.min(c.h, ch)) : ch;
-  const al = c.halign || 'center';
-  let left = al === 'left' ? cell.left : al === 'right' ? cell.right - W : cell.left + (cw - W) / 2;
+  let left = cell.left + (cw - W) / 2;
   left = Math.max(cell.left, Math.min(left, cell.right - W));
-  return { left, right: left + W, bottom: cell.bottom, top: cell.bottom + H };
+  const bottom = (c.valign || 'bottom') === 'top' ? cell.top - H : cell.bottom;
+  return { left, right: left + W, bottom, top: bottom + H };
+}
+// The drawer fronts (one rect per stacked front). Inset fronts sit within the opening with a reveal gap;
+// outset (overlay) fronts grow by the overlay (t/2 onto each surrounding member) so they cover the carcass edges.
+function drawerFronts(c) {
+  const t = S.cab.t, cell = drawerRect(c), g = DRAWER.gap, n = Math.max(1, c.count | 0);
+  const ov = c.mount === 'inset' ? 0 : t, half = ov / 2;
+  const x0 = cell.left - half, x1 = cell.right + half;
+  const yBase = cell.bottom - half, fband = ((cell.top - cell.bottom) + ov) / n;
+  const fronts = [];
+  for (let i = 0; i < n; i++) fronts.push({ x0: x0 + g / 2, x1: x1 - g / 2, y0: yBase + i * fband + g / 2, y1: yBase + (i + 1) * fband - g / 2 });
+  return fronts;
 }
 function drawerParts(c) {
   const t = S.cab.t, cell = drawerRect(c);
@@ -158,9 +169,11 @@ function drawerParts(c) {
   const n = Math.max(1, c.count | 0), band = Hc / n, depth = compDepth(c), g = DRAWER.gap;
   const boxOuterW = Math.max(1, Wc - 2 * DRAWER.sideClear), boxInnerW = Math.max(1, boxOuterW - 2 * t);
   const boxH = Math.max(1, band - DRAWER.boxHeadClear);
+  const fronts = drawerFronts(c);
   const parts = [];
   for (let i = 0; i < n; i++) {
-    parts.push({ name: 'Drawer front', key: 'Door', length: Math.max(1, band - g), width: Math.max(1, Wc - g) });
+    const f = fronts[i];
+    parts.push({ name: 'Drawer front', key: 'Door', length: Math.max(1, f.y1 - f.y0), width: Math.max(1, f.x1 - f.x0) });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH });
     parts.push({ name: 'Drawer back', key: 'DrawerBox', length: boxInnerW, width: boxH });
@@ -458,7 +471,8 @@ function buildBoxes() {
     else if (c.type === 'vertical') for (const s of verticalSegments(c)) push(c.pos - t / 2, c.pos + t / 2, s.lo, s.hi, z0, z1, vertCol, c.id);
     else if (c.type === 'drawer') {
       const cell = drawerRect(c), n = Math.max(1, c.count | 0), band = (cell.top - cell.bottom) / n, g = DRAWER.gap;
-      for (let i = 0; i < n; i++) push(cell.left + g / 2, cell.right - g / 2, cell.bottom + i * band + g / 2, cell.bottom + (i + 1) * band - g / 2, d, d + t, doorCol, c.id);
+      const fz0 = c.mount === 'inset' ? d - t : d, fz1 = fz0 + t;   // inset = flush within the opening; outset = proud of the cabinet face
+      for (let i = 0; i < n; i++) push(cell.left + g / 2, cell.right - g / 2, cell.bottom + i * band + g / 2, cell.bottom + (i + 1) * band - g / 2, fz0, fz1, doorCol, c.id);
     }
   }
   for (const r of doorRects()) push(r.x0, r.x1, r.y0, r.y1, d, d + t, doorCol, r.id, 0.55);
@@ -708,16 +722,17 @@ function renderSelectionPanel() {
   } else if (comp && comp.type === 'drawer') {
     const cell = cellAt(comp.ax, comp.ay, null), rect = drawerRect(comp);
     const cw = cell.right - cell.left, ch = cell.top - cell.bottom;
-    const W = rect.right - rect.left, H = rect.top - rect.bottom, n = Math.max(1, comp.count | 0), ha = comp.halign || 'center';
-    const opt = (v, lbl) => `<option value="${v}"${ha === v ? ' selected' : ''}>${lbl}</option>`;
+    const W = rect.right - rect.left, H = rect.top - rect.bottom, n = Math.max(1, comp.count | 0), va = comp.valign || 'bottom', mnt = comp.mount || 'outset';
+    const opt = (v, lbl) => `<option value="${v}"${va === v ? ' selected' : ''}>${lbl}</option>`;
+    const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `Drawer bank <small>(${u})</small>`;
     fields.innerHTML =
       `<label class="sel-row"><span>Drawers</span><input id="sel-count" type="number" min="1" max="12" step="1" value="${comp.count}"></label>` +
       row('sel-w', 'Width', fmt(W)) +
       row('sel-h', 'Height', fmt(H)) +
-      `<label class="sel-row"><span>Anchor</span><select id="sel-halign">${opt('left', 'Left')}${opt('center', 'Center')}${opt('right', 'Right')}</select></label>` +
+      `<label class="sel-row"><span>Anchor</span><select id="sel-valign">${opt('top', 'Top')}${opt('bottom', 'Bottom')}</select></label>` +
       row('sel-depth', 'Box depth', fmt(compDepth(comp))) +
-      row('sel-setback', 'Setback from back', fmt(comp.setback || 0));
+      `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset')}${optM('inset', 'Inset')}</select></label>`;
     derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)} · ${n} front(s) ≈ ${fmtU(H / n - DRAWER.gap)} high each.`;
     actions.classList.remove('hidden');
   } else if (comp) {
@@ -759,13 +774,13 @@ function applySelectedEdit() {
   if (c.type === 'door') { c.count = parseInt(($('sel-leaves') || {}).value, 10) === 2 ? 2 : 1; render(); return; }
   if (c.type === 'drawer') {
     const cnt = parseInt(($('sel-count') || {}).value, 10) || 1; c.count = Math.max(1, Math.min(12, cnt));
-    c.halign = (($('sel-halign') || {}).value) || 'center';
+    c.valign = (($('sel-valign') || {}).value) || 'bottom';
     const cell = cellAt(c.ax, c.ay, null), cw = cell.right - cell.left, ch = cell.top - cell.bottom;
     const W = get('sel-w'), H = get('sel-h');   // store only when smaller than the cell, so a full-cell bank keeps tracking the cell
     if (W > 0 && Math.abs(W - cw) > 0.5) c.w = Math.max(1, Math.min(W, cw)); else delete c.w;
     if (H > 0 && Math.abs(H - ch) > 0.5) c.h = Math.max(1, Math.min(H, ch)); else delete c.h;
     const usable = usableDepth(), dep = get('sel-depth'); if (dep > 0 && Math.abs(dep - usable) > 0.5) c.depth = Math.max(1, Math.min(dep, usable)); else delete c.depth;
-    const sb = get('sel-setback'); if (sb > 0.5) c.setback = Math.max(0, Math.min(sb, S.cab.d)); else delete c.setback;
+    if ((($('sel-mount') || {}).value) === 'inset') c.mount = 'inset'; else delete c.mount;
     render(); return;
   }
   const { w, h, t } = S.cab, max = c.type === 'shelf' ? w - t : h - t;
