@@ -96,8 +96,16 @@
           </select>
         </label>
         <button id="btn-add-door" type="button" class="full">+ Door into cell</button>
+        <button id="btn-door-cells" type="button" class="full">⊞ Pick cells for door</button>
+        <div id="door-cells-bar" class="hidden">
+          <p class="hint">Click bays in the design to combine them, then place one door spanning the picked region (it crosses the shelves you included, and stops at the ones you left out).</p>
+          <div class="btn-row">
+            <button id="btn-door-place" type="button" disabled>Place door (0)</button>
+            <button id="btn-door-cancel" type="button" class="ghost">Cancel</button>
+          </div>
+        </div>
         <label>Reveal gap <input id="in-reveal" type="number" min="0" step="0.5" /></label>
-        <p class="hint">Adds a door front to the cell you last clicked, bounded by surrounding shelves/verticals. Select a door to change its leaves or delete it.</p>
+        <p class="hint">"+ Door into cell" fits the single clicked bay. Use "Pick cells for door" to combine several bays across shelves into one door. Select a door to change its leaves, front (inset/outset) or Covers.</p>
       </section>
 
       <section class="card">

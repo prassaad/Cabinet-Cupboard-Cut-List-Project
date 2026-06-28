@@ -136,12 +136,21 @@ const verticalSegments = (c) =>
   splitSegments(c.a0, c.a1, S.comps.filter(s => s.type === 'shelf' && s.a0 <= c.pos && c.pos <= s.a1).map(s => ({ pos: s.pos, thick: partThick(s) })));
 
 // ---------- Doors (cell-bound component, like drawers) ----------
-// A door component fills the cell at its anchor with 1 or 2 leaves (count), inset by the reveal gap.
+// A door component fills the cell at its anchor with 1 or 2 leaves (count), separated by the reveal gap.
+// Mount mirrors drawers: 'inset' sits flush within the opening; 'outset' (overlay, the default) grows by
+// t/2 onto each surrounding member so it covers the carcass edges. Either way the reveal gap is removed.
+const doorMount = (c) => (c.mount === 'inset' ? 'inset' : 'outset');
+// The opening a door fills: an explicit multi-cell `span` (built by picking cells) if present,
+// otherwise the cell at its anchor expanded per its Covers mode. Shape: {left,right,bottom,top}.
+const doorBase = (c) => c.span ? c.span : cellAt(c.ax, c.ay, null, doorCoverOpts(c));
 function doorRectsFor(c) {
-  const g = S.doors.reveal, cell = cellAt(c.ax, c.ay, null, doorCoverOpts(c));
-  const x0 = cell.left + g / 2, x1 = cell.right - g / 2, y0 = cell.bottom + g / 2, y1 = cell.top - g / 2;
-  if ((c.count | 0) === 2) { const mid = (x0 + x1) / 2; return [{ x0, x1: mid - g / 2, y0, y1, id: c.id, side: 'L' }, { x0: mid + g / 2, x1, y0, y1, id: c.id, side: 'R' }]; }
-  return [{ x0, x1, y0, y1, id: c.id, side: '1' }];
+  const g = S.doors.reveal, t = S.cab.t, mount = doorMount(c);
+  const cell = doorBase(c);
+  const half = (mount === 'inset' ? 0 : t) / 2;   // overlay extends half the material onto each side
+  const x0 = cell.left - half + g / 2, x1 = cell.right + half - g / 2;
+  const y0 = cell.bottom - half + g / 2, y1 = cell.top + half - g / 2;
+  if ((c.count | 0) === 2) { const mid = (x0 + x1) / 2; return [{ x0, x1: mid - g / 2, y0, y1, id: c.id, side: 'L', mount }, { x0: mid + g / 2, x1, y0, y1, id: c.id, side: 'R', mount }]; }
+  return [{ x0, x1, y0, y1, id: c.id, side: '1', mount }];
 }
 function doorRects() { const out = []; for (const c of S.comps) if (c.type === 'door') for (const r of doorRectsFor(c)) out.push(r); return out; }
 
@@ -190,23 +199,32 @@ function drawerParts(c) {
 }
 
 // ---------- Cut list ----------
+// Every instance carries a `srcId` linking it back to the design part it came from:
+// carcass faces use string ids ('L','R','T','B','BK'), components/doors/drawers use their numeric id.
 function cutListInstances() {
   const { w, h, d, t, back } = S.cab;
   const innerW = Math.max(0, w - 2 * t);
   const items = [];
-  const add = (name, key, length, width) => items.push({ name, key, length, width });
-  add('Side', 'Side', h, d); add('Side', 'Side', h, d);
-  add('Top / Bottom', 'TopBottom', innerW, d); add('Top / Bottom', 'TopBottom', innerW, d);
-  if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W); }
+  const add = (name, key, length, width, srcId) => items.push({ name, key, length, width, srcId });
+  add('Side', 'Side', h, d, 'L'); add('Side', 'Side', h, d, 'R');
+  add('Top / Bottom', 'TopBottom', innerW, d, 'T'); add('Top / Bottom', 'TopBottom', innerW, d, 'B');
+  if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W, 'BK'); }
   for (const c of S.comps) {
-    if (c.type === 'shelf') for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c));
-    else if (c.type === 'vertical') for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c));
-    else if (c.type === 'drawer') for (const p of drawerParts(c)) add(p.name, p.key, p.length, p.width);
+    if (c.type === 'shelf') for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c), c.id);
+    else if (c.type === 'vertical') for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c), c.id);
+    else if (c.type === 'drawer') for (const p of drawerParts(c)) add(p.name, p.key, p.length, p.width, c.id);
   }
-  for (const r of doorRects()) add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0);
+  for (const r of doorRects()) add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0, r.id);
   return items;
 }
 const groupKey = (it) => `${it.name}|${Math.round(it.length)}|${Math.round(it.width)}|${it.key}`;
+// Map each cut-list group back to a representative design part id, so clicking a cutlist row
+// or a sheet piece can select the matching component/face in the 2D/3D design.
+function groupKeyToSrc() {
+  const map = new Map();
+  for (const it of cutListInstances()) if (!map.has(groupKey(it))) map.set(groupKey(it), it.srcId);
+  return map;
+}
 function cutList() {
   const map = new Map();
   for (const it of cutListInstances()) {
@@ -240,7 +258,7 @@ function renderCutList() {
   const selKeys = selectedGroupKeys();
   const tbody = document.querySelector('#cutlist tbody');
   tbody.innerHTML = parts.map(p =>
-    `<tr${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${bandNotation(p.key)}</td></tr>`
+    `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${bandNotation(p.key)}</td></tr>`
   ).join('');
   const ths = document.querySelectorAll('#cutlist thead th');
   ths[2].textContent = `Length (${S.unit})`; ths[3].textContent = `Width (${S.unit})`;
@@ -259,7 +277,7 @@ function renderCutList() {
 // ---------- Sheet nesting (FFDH shelf packing) ----------
 function nest(items) {
   const { w: SW, h: SH, kerf } = S.sheet, lock = S.grainLock;
-  const rects = items.map(it => ({ name: it.name, len: it.length, wid: it.width }));
+  const rects = items.map(it => ({ name: it.name, len: it.length, wid: it.width, gkey: groupKey(it), srcId: it.srcId }));
   rects.sort((a, b) => Math.max(b.len, b.wid) - Math.max(a.len, a.wid));
   const sheets = [];
   const newSheet = () => { const s = { levels: [], placements: [] }; sheets.push(s); return s; };
@@ -269,10 +287,11 @@ function nest(items) {
     if (top + fh <= SH && fw <= SW) { sheet.levels.push({ y: top, h: fh, x: fw + kerf }); return { x: 0, y: top, w: fw, h: fh }; }
     return null;
   };
+  const tag = (p, r, rot) => ({ ...p, name: r.name, gkey: r.gkey, srcId: r.srcId, rot });
   const tryPlace = (sheet, r) => {
-    let p = tryFootprint(sheet, r.len, r.wid); if (p) return { ...p, name: r.name, rot: false };
+    let p = tryFootprint(sheet, r.len, r.wid); if (p) return tag(p, r, false);
     if (lock) return null;
-    p = tryFootprint(sheet, r.wid, r.len); if (p) return { ...p, name: r.name, rot: true };
+    p = tryFootprint(sheet, r.wid, r.len); if (p) return tag(p, r, true);
     return null;
   };
   for (const r of rects) {
@@ -293,6 +312,13 @@ function partRect(c) {
 }
 function clampComp(c) {
   const t = S.cab.t, ht = partThick(c) / 2;
+  if (c.type === 'door' && c.span) {                 // keep the picked region inside the carcass, preserving its size where possible
+    const w = S.cab.w, h = S.cab.h, s = c.span;
+    const sw = Math.min(s.right - s.left, w - 2 * t), sh = Math.min(s.top - s.bottom, h - 2 * t);
+    s.left = Math.max(t, Math.min(s.left, w - t - sw)); s.right = s.left + sw;
+    s.bottom = Math.max(t, Math.min(s.bottom, h - t - sh)); s.top = s.bottom + sh;
+    c.ax = (s.left + s.right) / 2; c.ay = (s.bottom + s.top) / 2; return;
+  }
   if (c.type === 'drawer' || c.type === 'door') { c.ax = Math.max(t, Math.min(c.ax, S.cab.w - t)); c.ay = Math.max(t, Math.min(c.ay, S.cab.h - t)); return; }
   if (c.type === 'shelf') { const cell = cellAt((c.a0 + c.a1) / 2, c.pos, c.id); c.pos = Math.min(Math.max(c.pos, cell.bottom + ht), cell.top - ht); }
   else { const cell = cellAt(c.pos, (c.a0 + c.a1) / 2, c.id); c.pos = Math.min(Math.max(c.pos, cell.left + ht), cell.right - ht); }
@@ -452,6 +478,14 @@ function renderDesign() {
     dctx.fillRect(sx(hx) - 1.5, sy((r.y0 + r.y1) / 2) - 13, 3, 26);
   }
 
+  // cell-pick overlay: outline every bay; fill the ones currently chosen for the door
+  if (cellMode) {
+    for (const cell of enumerateOpenings())
+      fillRectMM(dctx, { x0: cell.left, x1: cell.right, y0: cell.bottom, y1: cell.top }, null, 'rgba(125,176,255,0.55)');
+    for (const cell of cellSel)
+      fillRectMM(dctx, { x0: cell.left, x1: cell.right, y0: cell.bottom, y1: cell.top }, 'rgba(90,150,255,0.28)', '#7db0ff');
+  }
+
   dctx.fillStyle = '#9aa3b2'; dctx.font = '12px system-ui, sans-serif'; dctx.textAlign = 'center';
   dctx.fillText(`W ${fmtU(w)}`, sx(w / 2), view.oy - 22);
   dctx.save(); dctx.translate(view.ox - 30, sy(h / 2)); dctx.rotate(-Math.PI / 2);
@@ -481,7 +515,7 @@ function buildBoxes() {
       for (const f of drawerFronts(c)) push(f.x0, f.x1, f.y0, f.y1, fz0, fz1, doorCol, c.id);
     }
   }
-  for (const r of doorRects()) push(r.x0, r.x1, r.y0, r.y1, d, d + t, doorCol, r.id, 0.55);
+  for (const r of doorRects()) { const z0 = r.mount === 'inset' ? d - t : d; push(r.x0, r.x1, r.y0, r.y1, z0, z0 + t, doorCol, r.id, 0.55); }
   return boxes;
 }
 const pointInPoly = (x, y, poly) => {
@@ -577,27 +611,45 @@ function renderDesign3D() {
 }
 
 // ---------- Sheet view ----------
-function drawPlacement(ctx, p, ox, oy, scale, showText) {
+// opts: { highlight, sheetNo } — highlight recolours the piece; sheetNo labels which sheet it sits on.
+function drawPlacement(ctx, p, ox, oy, scale, showText, opts) {
+  opts = opts || {};
+  const hi = !!opts.highlight, sheetNo = opts.sheetNo;
   const px = ox + p.x * scale, py = oy + p.y * scale, pw = p.w * scale, ph = p.h * scale;
-  ctx.fillStyle = '#3a78d6'; ctx.fillRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
-  ctx.strokeStyle = '#f1e4ba'; ctx.lineWidth = 1; ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
-  ctx.strokeStyle = 'rgba(207,224,255,0.30)'; ctx.beginPath();
+  ctx.fillStyle = hi ? '#e8873a' : '#3a78d6'; ctx.fillRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+  ctx.strokeStyle = hi ? '#ffd9a0' : '#f1e4ba'; ctx.lineWidth = hi ? 2 : 1; ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+  ctx.strokeStyle = hi ? 'rgba(255,232,200,0.45)' : 'rgba(207,224,255,0.30)'; ctx.lineWidth = 1; ctx.beginPath();
   if (p.rot) { for (let gx = px + pw / 4; gx < px + pw; gx += pw / 4) { ctx.moveTo(gx, py + 3); ctx.lineTo(gx, py + ph - 3); } }
   else { for (let gy = py + ph / 4; gy < py + ph; gy += ph / 4) { ctx.moveTo(px + 3, gy); ctx.lineTo(px + pw - 3, gy); } }
   ctx.stroke();
-  if (showText && pw > 40 && ph > 18) {
-    ctx.fillStyle = '#fbf3da'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '10px system-ui, sans-serif';
-    ctx.fillText(`${p.name[0]} ${fmt(p.rot ? p.h : p.w)}`, px + pw / 2, py + ph / 2); ctx.textBaseline = 'alphabetic';
-  } else if (showText && pw > 14 && ph > 12) {
-    ctx.fillStyle = '#fbf3da'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(p.name[0], px + pw / 2, py + ph / 2); ctx.textBaseline = 'alphabetic';
+  if (!showText) return;
+  const lenW = p.rot ? p.h : p.w, widW = p.rot ? p.w : p.h;   // original part length × width
+  const dim = `${fmt(lenW)}×${fmt(widW)}`;
+  const sLabel = sheetNo != null ? `S${sheetNo}` : '';
+  ctx.fillStyle = '#fbf3da'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (pw > 56 && ph > 30) {                       // room for name + sheet/dim on two lines
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillText(p.name, px + pw / 2, py + ph / 2 - 7);
+    ctx.font = '9px system-ui, sans-serif';
+    ctx.fillText(`${sLabel} · ${dim}`.replace(/^ · /, ''), px + pw / 2, py + ph / 2 + 7);
+  } else if (pw > 40 && ph > 18) {                // one line: name + dim
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillText(`${p.name} ${fmt(lenW)}`, px + pw / 2, py + ph / 2);
+  } else if (pw > 14 && ph > 12) {                // tiny: first letter only
+    ctx.font = '10px system-ui, sans-serif';
+    ctx.fillText(p.name[0], px + pw / 2, py + ph / 2);
   }
+  ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
 }
+// Screen-space rectangles of placed pieces, recorded each render so the sheet canvas is clickable.
+let lastSheetRects = [];
 function renderSheet(pack) {
   const { cw, ch } = fitCanvas(sheetCanvas, sctx);
   sctx.clearRect(0, 0, cw, ch);
+  lastSheetRects = [];
   const sheets = pack.sheets;
   if (!sheets.length) { sctx.fillStyle = '#9aa3b2'; sctx.font = '14px system-ui'; sctx.textAlign = 'center'; sctx.fillText('No parts to nest.', cw / 2, ch / 2); sctx.textAlign = 'left'; return; }
+  const selKeys = selectedGroupKeys();
   const pad = 24, gap = 20;
   const cols = Math.min(sheets.length, Math.max(1, Math.floor((cw - pad) / 220)));
   const rows = Math.ceil(sheets.length / cols);
@@ -609,7 +661,11 @@ function renderSheet(pack) {
     const x = pad / 2 + col * (cellW + gap) + (cellW - dw) / 2, y = pad / 2 + row * (cellH + 18 + gap);
     sctx.fillStyle = '#1b2027'; sctx.strokeStyle = '#5b6573'; sctx.lineWidth = 1;
     sctx.fillRect(x, y, dw, dh); sctx.strokeRect(x, y, dw, dh);
-    sheet.placements.forEach(p => drawPlacement(sctx, p, x, y, scale, true));
+    sheet.placements.forEach(p => {
+      const hi = p.gkey != null && selKeys.has(p.gkey);
+      drawPlacement(sctx, p, x, y, scale, true, { highlight: hi, sheetNo: i + 1 });
+      lastSheetRects.push({ x: x + p.x * scale, y: y + p.y * scale, w: p.w * scale, h: p.h * scale, gkey: p.gkey, srcId: p.srcId });
+    });
     sctx.fillStyle = '#9aa3b2'; sctx.textAlign = 'left'; sctx.textBaseline = 'alphabetic'; sctx.fillText(`Sheet ${i + 1}`, x, y + dh + 13);
   });
 }
@@ -696,7 +752,11 @@ function addComp(type) {
     clampComp(left); clampComp(right); clampComp(c);
     S.comps.push(left, right, c); S.selectedId = c.id; render(); return;
   }
-  if (type === 'door') { const c = { id: S._seq++, type: 'door', ax: p.x, ay: p.y, count: doorLeaves() }; clampComp(c); S.comps.push(c); S.selectedId = c.id; render(); return; }
+  if (type === 'door') {
+    // Fits the single clicked cell. To span several bays across shelves, use "Pick cells for door".
+    const c = { id: S._seq++, type: 'door', ax: p.x, ay: p.y, count: doorLeaves() };
+    clampComp(c); S.comps.push(c); S.selectedId = c.id; render(); return;
+  }
   const cell = cellAt(p.x, p.y, null);
   const c = { id: S._seq++, type };
   if (type === 'shelf') { c.a0 = cell.left; c.a1 = cell.right; c.pos = (cell.bottom + cell.top) / 2; }
@@ -729,14 +789,21 @@ function renderSelectionPanel() {
   const row = (rid, label, val) => `<label class="sel-row"><span>${label}</span><input id="${rid}" type="number" step="${step}" value="${val}"></label>`;
   const sel = (v) => lastAnchor === v ? ' selected' : '';
   if (comp && comp.type === 'door') {
-    const cell = cellAt(comp.ax, comp.ay, null, doorCoverOpts(comp)), Wc = cell.right - cell.left, Hc = cell.top - cell.bottom, two = (comp.count | 0) === 2;
-    const cov = comp.covers || 'cell';
+    const base = doorBase(comp), Wc = base.right - base.left, Hc = base.top - base.bottom, two = (comp.count | 0) === 2;
+    const cov = comp.covers || 'cell', mnt = doorMount(comp);
     const optC = (v, lbl) => `<option value="${v}"${cov === v ? ' selected' : ''}>${lbl}</option>`;
+    const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `Door front <small>(${u})</small>`;
+    // A span door (built from picked cells) controls its own region, so the Covers mode doesn't apply.
+    const coverRow = comp.span
+      ? `<div class="sel-ro">Region <b>picked cells</b> · <button type="button" id="sel-door-uncombine" class="linkish">use single cell</button></div>`
+      : `<label class="sel-row"><span>Covers</span><select id="sel-covers">${optC('cell', 'This cell')}${optC('column', 'Full column (ignore shelves)')}${optC('row', 'Full row (ignore verticals)')}${optC('all', 'Whole interior')}</select></label>`;
     fields.innerHTML =
       `<label class="sel-row"><span>Leaves</span><select id="sel-leaves"><option value="1"${two ? '' : ' selected'}>1 door</option><option value="2"${two ? ' selected' : ''}>2 doors</option></select></label>` +
-      `<label class="sel-row"><span>Covers</span><select id="sel-covers">${optC('cell', 'This cell')}${optC('column', 'Full column (ignore shelves)')}${optC('row', 'Full row (ignore verticals)')}${optC('all', 'Whole interior')}</select></label>`;
-    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)} · reveal ${fmtU(S.doors.reveal)} (set in Fronts / doors).`;
+      `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset (overlay)')}${optM('inset', 'Inset')}</select></label>` +
+      coverRow;
+    const dr = doorRectsFor(comp)[0];
+    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)} · ${mnt} front ${fmtU(dr.y1 - dr.y0)} × ${fmtU(dr.x1 - dr.x0)} · reveal ${fmtU(S.doors.reveal)} (set in Fronts / doors).`;
     actions.classList.remove('hidden');
   } else if (comp && comp.type === 'drawer') {
     const cell = cellAt(comp.ax, comp.ay, null), rect = drawerRect(comp);
@@ -795,6 +862,7 @@ function applySelectedEdit() {
   if (c.type === 'door') {
     c.count = parseInt(($('sel-leaves') || {}).value, 10) === 2 ? 2 : 1;
     const cov = (($('sel-covers') || {}).value) || 'cell'; if (cov === 'cell') delete c.covers; else c.covers = cov;
+    if ((($('sel-mount') || {}).value) === 'inset') c.mount = 'inset'; else delete c.mount;   // outset is the default
     render(); return;
   }
   if (c.type === 'drawer') {
@@ -832,6 +900,32 @@ function applySelectedEdit() {
   clampComp(c); render();   // recalculates cut list, sheets, BOM
 }
 
+// ---------- Cell-pick mode (build a door spanning several combined bays) ----------
+let cellMode = false;          // when on, clicking the 2D design toggles bays into the pick set
+let cellSel = [];              // chosen cells {left,right,bottom,top}
+const cellSig = (c) => `${Math.round(c.left)},${Math.round(c.right)},${Math.round(c.bottom)},${Math.round(c.top)}`;
+function updateCellModeUI() {
+  const bar = $('door-cells-bar'), btn = $('btn-door-cells'), place = $('btn-door-place');
+  if (bar) bar.classList.toggle('hidden', !cellMode);
+  if (btn) btn.classList.toggle('hidden', cellMode);
+  if (place) { place.textContent = `Place door (${cellSel.length})`; place.disabled = !cellSel.length; }
+  designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab';
+}
+function setCellMode(on) { cellMode = on; if (!on) cellSel = []; updateCellModeUI(); render(); }
+function toggleCellAt(mx, my) {
+  const cell = cellAt(mx, my, null), sig = cellSig(cell);
+  const i = cellSel.findIndex(c => cellSig(c) === sig);
+  if (i >= 0) cellSel.splice(i, 1); else cellSel.push(cell);
+  updateCellModeUI(); render();
+}
+function placeDoorFromCells() {
+  if (!cellSel.length) return;
+  let left = Infinity, right = -Infinity, bottom = Infinity, top = -Infinity;
+  for (const c of cellSel) { left = Math.min(left, c.left); right = Math.max(right, c.right); bottom = Math.min(bottom, c.bottom); top = Math.max(top, c.top); }
+  const c = { id: S._seq++, type: 'door', ax: (left + right) / 2, ay: (bottom + top) / 2, count: doorLeaves(), span: { left, right, bottom, top } };
+  S.comps.push(c); S.selectedId = c.id; setCellMode(false);   // setCellMode renders
+}
+
 // ---------- Design interaction ----------
 function canvasXY(e) { const r = designCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
 function eventToMM(e) { const { x, y } = canvasXY(e); return { mx: (x - view.ox) / view.scale, my: S.cab.h - (y - view.oy) / view.scale }; }
@@ -840,7 +934,7 @@ function hitTest(mx, my) {
   for (let i = S.comps.length - 1; i >= 0; i--) {
     const c = S.comps[i];
     if (c.type === 'drawer') { const cl = drawerRect(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
-    if (c.type === 'door') { const cl = cellAt(c.ax, c.ay, null, doorCoverOpts(c)); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
+    if (c.type === 'door') { const cl = doorBase(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
     const r = partRect(c); if (mx >= r.x0 - tol && mx <= r.x1 + tol && my >= r.y0 - tol && my <= r.y1 + tol) return c;
   }
   return null;
@@ -849,6 +943,7 @@ let drag = null;
 designCanvas.addEventListener('mousedown', (e) => {
   if (S.viewMode === '3d') { drag = { type: 'orbit', x: e.clientX, y: e.clientY, moved: 0 }; designCanvas.style.cursor = 'grabbing'; return; }
   const { mx, my } = eventToMM(e); S.lastPoint = { x: mx, y: my };
+  if (cellMode) { toggleCellAt(mx, my); return; }   // pick/unpick a bay; no drag while combining cells
   const hit = hitTest(mx, my); S.selectedId = hit ? hit.id : null;
   if (hit) drag = { type: 'part', comp: hit };
   else drag = { type: 'pan', x: e.clientX, y: e.clientY };   // drag empty space to pan
@@ -868,7 +963,10 @@ window.addEventListener('mousemove', (e) => {
     drag.x = e.clientX; drag.y = e.clientY; render(); return;
   }
   const { mx, my } = eventToMM(e);
-  if (drag.comp.type === 'drawer' || drag.comp.type === 'door') { drag.comp.ax = mx; drag.comp.ay = my; }
+  if (drag.comp.type === 'door' && drag.comp.span) {
+    const s = drag.comp.span, dx = mx - drag.comp.ax, dy = my - drag.comp.ay;
+    s.left += dx; s.right += dx; s.bottom += dy; s.top += dy; drag.comp.ax = mx; drag.comp.ay = my;
+  } else if (drag.comp.type === 'drawer' || drag.comp.type === 'door') { drag.comp.ax = mx; drag.comp.ay = my; }
   else drag.comp.pos = drag.comp.type === 'shelf' ? my : mx;
   clampComp(drag.comp); render();
 });
@@ -887,15 +985,40 @@ window.addEventListener('mouseup', (e) => {
   if (drag) { drag = null; designCanvas.style.cursor = 'grab'; }
 });
 
+// ---------- Cross-highlight: cutlist ⇄ sheet layout ⇄ 2D/3D design ----------
+// Selecting by group key resolves to a representative design part, so the cutlist row,
+// the sheet pieces, and the 2D/3D part all light up together off the one S.selectedId.
+function selectByGroupKey(gkey) {
+  if (gkey == null) return;
+  const src = groupKeyToSrc().get(gkey);
+  S.selectedId = src != null ? src : null;
+  render();
+}
+// Click a cut-list row → highlight its pieces in the sheet layout and select the part in 2D/3D.
+document.querySelector('#cutlist tbody').addEventListener('click', (e) => {
+  const tr = e.target.closest('tr'); if (!tr || !tr.dataset.gkey) return;
+  selectByGroupKey(tr.dataset.gkey);
+});
+// Click a piece in the sheet layout → same cross-selection.
+sheetCanvas.addEventListener('click', (e) => {
+  const r = sheetCanvas.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  for (let i = lastSheetRects.length - 1; i >= 0; i--) {
+    const p = lastSheetRects[i];
+    if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) { selectByGroupKey(p.gkey); return; }
+  }
+  S.selectedId = null; render();   // click empty sheet space clears the selection
+});
+
 // ---------- Tabs / view ----------
 document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
+  if (cellMode && tab.dataset.tab !== 'design') setCellMode(false);
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
   designCanvas.classList.toggle('active', tab.dataset.tab === 'design');
   sheetCanvas.classList.toggle('active', tab.dataset.tab === 'sheet');
   render();
 }));
-function setViewMode(m) { S.viewMode = m; if (m === '3d') { S.showDims = false; inDims.checked = false; } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = 'grab'; render(); }
+function setViewMode(m) { S.viewMode = m; if (m === '3d') { S.showDims = false; inDims.checked = false; if (cellMode) setCellMode(false); } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab'; render(); }
 $('v2d').addEventListener('click', () => setViewMode('2d'));
 $('v3d').addEventListener('click', () => setViewMode('3d'));
 function zoomStep(f) {
@@ -936,7 +1059,7 @@ function exportPDF() {
   const imgs = pack.sheets.map((sheet, i) => {
     const c = document.createElement('canvas'); c.width = Math.round(pack.SW * scale); c.height = Math.round(pack.SH * scale);
     const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.strokeStyle = '#333'; x.strokeRect(0.5, 0.5, c.width - 1, c.height - 1);
-    sheet.placements.forEach(p => drawPlacement(x, p, 0, 0, scale, true));
+    sheet.placements.forEach(p => drawPlacement(x, p, 0, 0, scale, true, { sheetNo: i + 1 }));
     return `<figure><img src="${c.toDataURL('image/png')}"/><figcaption>Sheet ${i + 1} — ${fmt(pack.SW)}×${fmt(pack.SH)} ${S.unit}</figcaption></figure>`;
   }).join('');
   const tape = parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0) / 1000;
@@ -970,6 +1093,9 @@ inBackType.addEventListener('change', readBack);
 inGrain.addEventListener('change', () => { S.grainLock = inGrain.checked; render(); });
 inPreset.addEventListener('change', () => { S.preset = inPreset.value; if (PRESETS[S.preset]) { Object.assign(S.cab, PRESETS[S.preset]); readInputs(); syncInputs(); } });
 $('btn-add-door').addEventListener('click', () => addComp('door'));
+$('btn-door-cells').addEventListener('click', () => setCellMode(true));
+$('btn-door-cancel').addEventListener('click', () => setCellMode(false));
+$('btn-door-place').addEventListener('click', placeDoorFromCells);
 inReveal.addEventListener('input', () => { S.doors.reveal = Math.max(0, toMM(parseFloat(inReveal.value) || 0)); render(); });
 inExplode.addEventListener('input', () => { S.explode = parseFloat(inExplode.value) || 0; render(); });
 inDims.addEventListener('change', () => { S.showDims = inDims.checked; render(); });
@@ -985,6 +1111,11 @@ const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.
 const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if (c && (c.type === 'drawer' || c.type === 'door')) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
 $('sel-fields').addEventListener('change', liveChange);
+$('sel-fields').addEventListener('click', (e) => {
+  if (e.target.id !== 'sel-door-uncombine') return;
+  const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null;
+  if (c && c.type === 'door') { delete c.span; clampComp(c); render(); }   // revert to the cell at its anchor
+});
 $('btn-save').addEventListener('click', save);
 $('btn-load').addEventListener('click', load);
 $('btn-reset').addEventListener('click', reset);

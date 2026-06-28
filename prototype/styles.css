@@ -139,6 +139,10 @@ select {
 canvas.view { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
 canvas.view.active { display: block; }
 #design-canvas { cursor: grab; }
+#sheet-canvas { cursor: pointer; }
+
+.linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
+.linkish:hover { filter: brightness(1.1); }
 
 .stats { padding: 10px 12px; color: var(--muted); font-size: 13px; }
 .stats.hidden { display: none; }
@@ -149,6 +153,7 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 th:first-child, td:first-child { text-align: left; }
 thead th { position: sticky; top: 0; background: var(--panel); color: var(--muted); font-weight: 600; }
+tbody tr { cursor: pointer; }
 tbody tr:hover { background: #ffffff0a; }
 tbody tr.cl-selected { background: #d9a93b2e; box-shadow: inset 3px 0 0 var(--accent); }
 tbody tr.cl-selected td { color: var(--ink); }
