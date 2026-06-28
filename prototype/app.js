@@ -100,33 +100,36 @@ function normalizeComps() {
     }
   }
 }
+// Panel thickness for a shelf/vertical: its own override (e.g. a 25 mm drawer flank) or the cabinet default.
+const FLANK_T = 25;   // mm — default thickness of the verticals auto-added beside a drawer
+const partThick = (c) => (c && c.thick != null) ? Math.max(1, c.thick) : S.cab.t;
 // Cell (rectangle) containing point P, bounded by parts whose span crosses P. Excludes excludeId.
 function cellAt(px, py, excludeId) {
   const { w, h, t } = S.cab;
   let left = t, right = w - t, bottom = t, top = h - t;
   for (const c of S.comps) {
     if (c.id === excludeId) continue;
+    const ht = partThick(c) / 2;
     if (c.type === 'vertical' && c.a0 <= py && py <= c.a1) {
-      if (c.pos <= px) left = Math.max(left, c.pos + t / 2); else right = Math.min(right, c.pos - t / 2);
+      if (c.pos <= px) left = Math.max(left, c.pos + ht); else right = Math.min(right, c.pos - ht);
     } else if (c.type === 'shelf' && c.a0 <= px && px <= c.a1) {
-      if (c.pos <= py) bottom = Math.max(bottom, c.pos + t / 2); else top = Math.min(top, c.pos - t / 2);
+      if (c.pos <= py) bottom = Math.max(bottom, c.pos + ht); else top = Math.min(top, c.pos - ht);
     }
   }
   return { left, right, bottom, top };
 }
-// Split [a0,a1] at cut centres (each consuming thickness t). Returns segments {lo,hi,len}.
-function splitSegments(a0, a1, cutCentres) {
-  const t = S.cab.t;
-  const cuts = cutCentres.filter(c => c > a0 && c < a1).sort((x, y) => x - y);
+// Split [a0,a1] at crossing parts (each {pos,thick} consuming its own thickness). Returns segments {lo,hi,len}.
+function splitSegments(a0, a1, cuts) {
+  const list = cuts.filter(c => c.pos > a0 && c.pos < a1).sort((x, y) => x.pos - y.pos);
   const segs = []; let cur = a0;
-  for (const cx of cuts) { const lo = cx - t / 2; if (lo > cur) segs.push({ lo: cur, hi: lo, len: lo - cur }); cur = cx + t / 2; }
+  for (const c of list) { const lo = c.pos - c.thick / 2; if (lo > cur) segs.push({ lo: cur, hi: lo, len: lo - cur }); cur = c.pos + c.thick / 2; }
   if (a1 > cur) segs.push({ lo: cur, hi: a1, len: a1 - cur });
   return segs.filter(s => s.len > 0.5);
 }
 const shelfSegments = (c) =>
-  splitSegments(c.a0, c.a1, S.comps.filter(d => d.type === 'vertical' && d.a0 <= c.pos && c.pos <= d.a1).map(d => d.pos));
+  splitSegments(c.a0, c.a1, S.comps.filter(d => d.type === 'vertical' && d.a0 <= c.pos && c.pos <= d.a1).map(d => ({ pos: d.pos, thick: partThick(d) })));
 const verticalSegments = (c) =>
-  splitSegments(c.a0, c.a1, S.comps.filter(s => s.type === 'shelf' && s.a0 <= c.pos && c.pos <= s.a1).map(s => s.pos));
+  splitSegments(c.a0, c.a1, S.comps.filter(s => s.type === 'shelf' && s.a0 <= c.pos && c.pos <= s.a1).map(s => ({ pos: s.pos, thick: partThick(s) })));
 
 // ---------- Doors (cell-bound component, like drawers) ----------
 // A door component fills the cell at its anchor with 1 or 2 leaves (count), inset by the reveal gap.
@@ -280,15 +283,15 @@ function nest(items) {
 
 // ---------- 2D design view ----------
 function partRect(c) {
-  const t = S.cab.t;
-  if (c.type === 'shelf') return { x0: c.a0, x1: c.a1, y0: c.pos - t / 2, y1: c.pos + t / 2 };
-  return { x0: c.pos - t / 2, x1: c.pos + t / 2, y0: c.a0, y1: c.a1 };
+  const ht = partThick(c) / 2;
+  if (c.type === 'shelf') return { x0: c.a0, x1: c.a1, y0: c.pos - ht, y1: c.pos + ht };
+  return { x0: c.pos - ht, x1: c.pos + ht, y0: c.a0, y1: c.a1 };
 }
 function clampComp(c) {
-  const t = S.cab.t;
+  const t = S.cab.t, ht = partThick(c) / 2;
   if (c.type === 'drawer' || c.type === 'door') { c.ax = Math.max(t, Math.min(c.ax, S.cab.w - t)); c.ay = Math.max(t, Math.min(c.ay, S.cab.h - t)); return; }
-  if (c.type === 'shelf') { const cell = cellAt((c.a0 + c.a1) / 2, c.pos, c.id); c.pos = Math.min(Math.max(c.pos, cell.bottom + t / 2), cell.top - t / 2); }
-  else { const cell = cellAt(c.pos, (c.a0 + c.a1) / 2, c.id); c.pos = Math.min(Math.max(c.pos, cell.left + t / 2), cell.right - t / 2); }
+  if (c.type === 'shelf') { const cell = cellAt((c.a0 + c.a1) / 2, c.pos, c.id); c.pos = Math.min(Math.max(c.pos, cell.bottom + ht), cell.top - ht); }
+  else { const cell = cellAt(c.pos, (c.a0 + c.a1) / 2, c.id); c.pos = Math.min(Math.max(c.pos, cell.left + ht), cell.right - ht); }
 }
 
 function fitCanvas(canvas, ctx) {
@@ -362,8 +365,9 @@ function enumerateOpenings() {
   const { w, h, t } = S.cab;
   const xs = new Set([t, w - t]), ys = new Set([t, h - t]);
   for (const c of S.comps) {
-    if (c.type === 'vertical') { xs.add(c.pos - t / 2); xs.add(c.pos + t / 2); }
-    else { ys.add(c.pos - t / 2); ys.add(c.pos + t / 2); }
+    const ht = partThick(c) / 2;
+    if (c.type === 'vertical') { xs.add(c.pos - ht); xs.add(c.pos + ht); }
+    else { ys.add(c.pos - ht); ys.add(c.pos + ht); }
   }
   const xa = [...xs].sort((a, b) => a - b), ya = [...ys].sort((a, b) => a - b), seen = new Set(), out = [];
   for (let i = 0; i < xa.length - 1; i++) {
@@ -398,11 +402,9 @@ function openingDim(ctx, yLoMM, yHiMM, xLeftMM) {
 }
 
 function drawDrawer2D(c) {
-  const cell = drawerRect(c), n = Math.max(1, c.count | 0), sel = c.id === S.selectedId;
-  const band = (cell.top - cell.bottom) / n, g = DRAWER.gap;
-  for (let i = 0; i < n; i++) {
-    const y0 = cell.bottom + i * band + g / 2, y1 = cell.bottom + (i + 1) * band - g / 2;
-    const r = { x0: cell.left + g / 2, x1: cell.right - g / 2, y0, y1 };
+  const sel = c.id === S.selectedId;
+  for (const f of drawerFronts(c)) {
+    const y1 = f.y1, r = { x0: f.x0, x1: f.x1, y0: f.y0, y1 };
     fillRectMM(dctx, r, sel ? 'rgba(255,180,84,0.92)' : 'rgba(203,160,58,0.92)', sel ? '#ffd9a0' : '#f1e4ba');
     const cx = sx((r.x0 + r.x1) / 2), hy = sy(y1) + 14;          // handle near the top of each front
     dctx.strokeStyle = '#2a1d02'; dctx.lineWidth = 2; dctx.beginPath(); dctx.moveTo(cx - 18, hy); dctx.lineTo(cx + 18, hy); dctx.stroke();
@@ -467,12 +469,12 @@ function buildBoxes() {
   for (const c of S.comps) {
     const z0 = Math.max(0, zF + (c.setback || 0));        // positioned from the back panel front face
     const z1 = Math.min(d, z0 + compDepth(c));
-    if (c.type === 'shelf') for (const s of shelfSegments(c)) push(s.lo, s.hi, c.pos - t / 2, c.pos + t / 2, z0, z1, shelfCol, c.id);
-    else if (c.type === 'vertical') for (const s of verticalSegments(c)) push(c.pos - t / 2, c.pos + t / 2, s.lo, s.hi, z0, z1, vertCol, c.id);
+    const ht = partThick(c) / 2;
+    if (c.type === 'shelf') for (const s of shelfSegments(c)) push(s.lo, s.hi, c.pos - ht, c.pos + ht, z0, z1, shelfCol, c.id);
+    else if (c.type === 'vertical') for (const s of verticalSegments(c)) push(c.pos - ht, c.pos + ht, s.lo, s.hi, z0, z1, vertCol, c.id);
     else if (c.type === 'drawer') {
-      const cell = drawerRect(c), n = Math.max(1, c.count | 0), band = (cell.top - cell.bottom) / n, g = DRAWER.gap;
       const fz0 = c.mount === 'inset' ? d - t : d, fz1 = fz0 + t;   // inset = flush within the opening; outset = proud of the cabinet face
-      for (let i = 0; i < n; i++) push(cell.left + g / 2, cell.right - g / 2, cell.bottom + i * band + g / 2, cell.bottom + (i + 1) * band - g / 2, fz0, fz1, doorCol, c.id);
+      for (const f of drawerFronts(c)) push(f.x0, f.x1, f.y0, f.y1, fz0, fz1, doorCol, c.id);
     }
   }
   for (const r of doorRects()) push(r.x0, r.x1, r.y0, r.y1, d, d + t, doorCol, r.id, 0.55);
@@ -679,7 +681,17 @@ function readInputs() {
 function addComp(type) {
   const { w, h, t } = S.cab;
   const p = S.lastPoint || { x: w / 2, y: h / 2 };
-  if (type === 'drawer') { const c = { id: S._seq++, type: 'drawer', ax: p.x, ay: p.y, count: drawerCount() }; clampComp(c); S.comps.push(c); S.selectedId = c.id; render(); return; }
+  if (type === 'drawer') {
+    // Auto-frame the drawer with a vertical flank on the left and right; the drawer cell sits between them.
+    const cell = cellAt(p.x, p.y, null);
+    const ft = Math.min(FLANK_T, Math.max(1, (cell.right - cell.left) / 2 - 1));   // never wider than half the opening
+    const a0 = cell.bottom, a1 = cell.top;
+    const left = { id: S._seq++, type: 'vertical', pos: cell.left + ft / 2, a0, a1, thick: ft };
+    const right = { id: S._seq++, type: 'vertical', pos: cell.right - ft / 2, a0, a1, thick: ft };
+    const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount() };
+    clampComp(left); clampComp(right); clampComp(c);
+    S.comps.push(left, right, c); S.selectedId = c.id; render(); return;
+  }
   if (type === 'door') { const c = { id: S._seq++, type: 'door', ax: p.x, ay: p.y, count: doorLeaves() }; clampComp(c); S.comps.push(c); S.selectedId = c.id; render(); return; }
   const cell = cellAt(p.x, p.y, null);
   const c = { id: S._seq++, type };
@@ -733,7 +745,8 @@ function renderSelectionPanel() {
       `<label class="sel-row"><span>Anchor</span><select id="sel-valign">${opt('top', 'Top')}${opt('bottom', 'Bottom')}</select></label>` +
       row('sel-depth', 'Box depth', fmt(compDepth(comp))) +
       `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset')}${optM('inset', 'Inset')}</select></label>`;
-    derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)} · ${n} front(s) ≈ ${fmtU(H / n - DRAWER.gap)} high each.`;
+    const ff = drawerFronts(comp)[0];
+    derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)} · ${n} ${mnt} front(s) ${fmtU(ff.x1 - ff.x0)} × ${fmtU(ff.y1 - ff.y0)} each.`;
     actions.classList.remove('hidden');
   } else if (comp) {
     const isShelf = comp.type === 'shelf';
@@ -741,6 +754,7 @@ function renderSelectionPanel() {
     fields.innerHTML =
       row('sel-pos', isShelf ? 'Height' : 'Position', fmt(comp.pos)) +
       row('sel-len', isShelf ? 'Length' : 'Height', fmt(comp.a1 - comp.a0)) +
+      row('sel-thick', isShelf ? 'Thickness' : 'Width', fmt(partThick(comp))) +
       row('sel-depth', 'Depth', fmt(compDepth(comp))) +
       row('sel-setback', 'Setback from back', fmt(comp.setback || 0)) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-anchor">` +
@@ -794,6 +808,9 @@ function applySelectedEdit() {
   a0 = Math.max(t, Math.min(a0, max - 1));
   a1 = Math.max(a0 + 1, Math.min(a1, max));
   c.a0 = a0; c.a1 = a1; c.pos = get('sel-pos');
+  // Panel thickness (e.g. a 25 mm flank): store an override only when it differs from the cabinet default.
+  const thk = get('sel-thick');
+  if (thk > 0 && Math.abs(thk - S.cab.t) > 0.5) c.thick = Math.max(1, thk); else delete c.thick;
   // Depth: store an override only when it differs from the usable depth; equal value clears it (so it follows the back panel).
   const usable = usableDepth(), depth = get('sel-depth');
   if (depth > 0 && Math.abs(depth - usable) > 0.5) c.depth = Math.max(1, Math.min(depth, usable));
