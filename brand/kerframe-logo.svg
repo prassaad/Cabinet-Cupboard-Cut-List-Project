@@ -1,0 +1,27 @@
+<svg width="360" height="96" viewBox="0 0 360 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Kerframe">
+  <!-- ===== Icon: carcass frame + K + kerf notch ===== -->
+  <g transform="translate(12 12)">
+    <!-- frame / carcass tile -->
+    <rect x="0" y="0" width="72" height="72" rx="16" fill="#222831"/>
+    <rect x="9" y="9" width="54" height="54" rx="9" fill="none" stroke="#39424f" stroke-width="2"/>
+
+    <!-- K, drawn as a side panel (stem) + two diagonals; stem is split by a kerf cut -->
+    <g stroke="#e0a93a" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M26 19 V33"/>           <!-- upper stem -->
+      <path d="M26 39 V53"/>           <!-- lower stem (gap = the kerf) -->
+      <path d="M26 36 L48 19"/>        <!-- upper diagonal -->
+      <path d="M26 36 L48 53"/>        <!-- lower diagonal -->
+    </g>
+    <!-- the saw cut itself: a thin cream sawline across the kerf gap -->
+    <path d="M20 38 L33 33" stroke="#f1e4ba" stroke-width="2.4" stroke-linecap="round"/>
+  </g>
+
+  <!-- ===== Wordmark: kerf|rame reveals the hidden word ===== -->
+  <text x="100" y="52" font-family="'Segoe UI', system-ui, -apple-system, Arial, sans-serif"
+        font-size="40" font-weight="700" letter-spacing="-1.2">
+    <tspan fill="#e8b248">kerf</tspan><tspan fill="#aeb7c6">rame</tspan>
+  </text>
+  <!-- tagline -->
+  <text x="101" y="74" font-family="'Segoe UI', system-ui, -apple-system, Arial, sans-serif"
+        font-size="13" font-weight="500" letter-spacing="2.6" fill="#6b7686">DESIGN · CUT · DONE</text>
+</svg>

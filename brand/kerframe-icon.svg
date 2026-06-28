@@ -1,0 +1,11 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Kerframe icon">
+  <rect x="0" y="0" width="96" height="96" rx="22" fill="#222831"/>
+  <rect x="12" y="12" width="72" height="72" rx="12" fill="none" stroke="#39424f" stroke-width="2.5"/>
+  <g transform="translate(13 13)" stroke="#e0a93a" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M34 25 V44"/>
+    <path d="M34 53 V72"/>
+    <path d="M34 48 L64 25"/>
+    <path d="M34 48 L64 72"/>
+  </g>
+  <path d="M40 64 L58 57" stroke="#f1e4ba" stroke-width="3.2" stroke-linecap="round" transform="translate(0 -13)"/>
+</svg>
