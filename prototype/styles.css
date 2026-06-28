@@ -73,6 +73,7 @@ button.full { width: 100%; margin-top: 8px; }
 .card.grow { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .card h2 small { text-transform: none; letter-spacing: 0; }
+.card h3.sub { margin: 14px 0 10px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 
 label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--muted); }
 label.checkbox { justify-content: flex-start; }
@@ -141,6 +142,37 @@ canvas.view.active { display: block; }
 #design-canvas { cursor: grab; }
 #sheet-canvas { cursor: pointer; }
 
+/* Setup tab (relocated set-once panels) */
+.setup-view { position: absolute; inset: 0; overflow: auto; padding: 18px; display: none; }
+.setup-view.active { display: block; }
+.setup-intro { margin: 0 0 16px; color: var(--muted); font-size: 13px; max-width: 760px; }
+.setup-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 360px)); gap: 16px; align-items: start; }
+.setup-view .card { margin: 0; }
+
+/* Floating glass panel for the selected part — overlays the canvas without taking layout space */
+.sel-overlay {
+  position: absolute; top: 12px; right: 12px; z-index: 6;
+  width: 264px; max-height: calc(100% - 24px); overflow: auto;
+  padding: 12px 14px;
+  background: rgba(47, 52, 61, 0.62);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+  animation: sel-pop .14s ease-out;
+}
+.sel-overlay.hidden { display: none; }
+@keyframes sel-pop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+.sel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.sel-head h2 { margin: 0 0 10px; }
+.sel-close {
+  flex: none; width: 24px; height: 24px; padding: 0; line-height: 1;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.sel-close:hover { color: var(--ink); background: #ffffff14; }
+
 .linkish { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .linkish:hover { filter: brightness(1.1); }
 
@@ -160,6 +192,61 @@ tbody tr.cl-selected td { color: var(--ink); }
 
 .summary { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .summary b { color: var(--ink); }
+
+/* ---------- Scrollbars (thin, theme-aware, overlay-style) ---------- */
+/* Firefox */
+.panel, .table-wrap, .setup-view, .sel-overlay, #sel-fields, .ai-log {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(154, 163, 178, 0.40) transparent;
+}
+/* Reserve the cut-list gutter so the table doesn't shift when the bar appears */
+.table-wrap { scrollbar-gutter: stable; }
+
+/* WebKit / Chromium / Edge */
+.panel::-webkit-scrollbar,
+.table-wrap::-webkit-scrollbar,
+.setup-view::-webkit-scrollbar,
+.sel-overlay::-webkit-scrollbar,
+#sel-fields::-webkit-scrollbar,
+.ai-log::-webkit-scrollbar { width: 12px; height: 12px; }
+
+.panel::-webkit-scrollbar-track,
+.table-wrap::-webkit-scrollbar-track,
+.setup-view::-webkit-scrollbar-track,
+.sel-overlay::-webkit-scrollbar-track,
+#sel-fields::-webkit-scrollbar-track,
+.ai-log::-webkit-scrollbar-track { background: transparent; }
+
+.panel::-webkit-scrollbar-thumb,
+.table-wrap::-webkit-scrollbar-thumb,
+.setup-view::-webkit-scrollbar-thumb,
+.sel-overlay::-webkit-scrollbar-thumb,
+#sel-fields::-webkit-scrollbar-thumb,
+.ai-log::-webkit-scrollbar-thumb {
+  background: rgba(154, 163, 178, 0.32);
+  border: 3px solid transparent;       /* insets the thumb → slim floating look */
+  background-clip: padding-box;
+  border-radius: 8px;
+  min-height: 36px;                    /* keep the handle grabbable on long lists */
+}
+.panel:hover::-webkit-scrollbar-thumb,
+.table-wrap:hover::-webkit-scrollbar-thumb,
+.setup-view:hover::-webkit-scrollbar-thumb,
+.sel-overlay:hover::-webkit-scrollbar-thumb,
+#sel-fields:hover::-webkit-scrollbar-thumb,
+.ai-log:hover::-webkit-scrollbar-thumb { background: rgba(154, 163, 178, 0.50); background-clip: padding-box; }
+
+.panel::-webkit-scrollbar-thumb:hover,
+.table-wrap::-webkit-scrollbar-thumb:hover,
+.setup-view::-webkit-scrollbar-thumb:hover,
+.sel-overlay::-webkit-scrollbar-thumb:hover,
+#sel-fields::-webkit-scrollbar-thumb:hover,
+.ai-log::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+
+/* Don't paint a thumb when there's nothing to scroll */
+.panel::-webkit-scrollbar-thumb:vertical:active,
+.table-wrap::-webkit-scrollbar-corner,
+.panel::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---------- AI Design Copilot ---------- */
 #ai-fab {

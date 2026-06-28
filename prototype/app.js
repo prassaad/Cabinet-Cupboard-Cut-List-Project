@@ -1014,8 +1014,10 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   if (cellMode && tab.dataset.tab !== 'design') setCellMode(false);
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
+  if (tab.dataset.tab === 'setup') S.selectedId = null;   // close the floating property sheet — it'd cover the Setup form
   designCanvas.classList.toggle('active', tab.dataset.tab === 'design');
   sheetCanvas.classList.toggle('active', tab.dataset.tab === 'sheet');
+  $('setup-view').classList.toggle('active', tab.dataset.tab === 'setup');
   render();
 }));
 function setViewMode(m) { S.viewMode = m; if (m === '3d') { S.showDims = false; inDims.checked = false; if (cellMode) setCellMode(false); } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab'; render(); }
@@ -1105,6 +1107,7 @@ $('btn-add-drawer').addEventListener('click', () => addComp('drawer'));
 btnDelete.addEventListener('click', deleteSelected);
 $('sel-update').addEventListener('click', applySelectedEdit);
 $('sel-delete').addEventListener('click', deleteSelected);
+$('sel-close').addEventListener('click', () => { S.selectedId = null; render(); });
 $('sel-fields').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applySelectedEdit(); } });
 // Drawer banks apply live as you type; drawer + door dropdowns apply on change (other parts still use the Update button).
 const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if (c && c.type === 'drawer') applySelectedEdit(); };

@@ -10,10 +10,6 @@
   <header class="topbar">
     <h1>Cabinet &amp; Cupboard Cut List <span class="tag">prototype</span></h1>
     <div class="top-actions">
-      <div class="unit-toggle" role="group" aria-label="Units">
-        <button id="unit-mm" class="active" type="button">mm</button>
-        <button id="unit-in" type="button">inch</button>
-      </div>
       <button id="btn-save" type="button">Save</button>
       <button id="btn-load" type="button">Load</button>
       <button id="btn-reset" type="button" class="ghost">Reset</button>
@@ -23,38 +19,6 @@
   <main class="layout">
     <!-- LEFT: SIZES + COMPONENTS -->
     <aside class="panel left">
-      <section class="card">
-        <h2>Sizes <small class="unit-label">(mm)</small></h2>
-        <label>Type
-          <select id="in-preset">
-            <option value="base">Base</option>
-            <option value="wall">Wall</option>
-            <option value="tall">Tall</option>
-            <option value="custom">Custom</option>
-          </select>
-        </label>
-        <label>Height <input id="in-h" type="number" min="1" step="1" /></label>
-        <label>Width  <input id="in-w" type="number" min="1" step="1" /></label>
-        <label>Depth  <input id="in-d" type="number" min="1" step="1" /></label>
-        <label>Material thickness <input id="in-t" type="number" min="1" step="1" /></label>
-        <label class="checkbox"><input id="in-back" type="checkbox" checked /> Include back panel</label>
-      </section>
-
-      <section class="card" id="card-back">
-        <h2>Back panel <small class="unit-label">(mm)</small></h2>
-        <label>Fixing
-          <select id="in-back-type">
-            <option value="groove">Groove / dado</option>
-            <option value="rabbet">Rabbet / rebate</option>
-            <option value="overlay">Full overlay</option>
-          </select>
-        </label>
-        <label>Back thickness <input id="in-back-thk" type="number" min="1" step="1" /></label>
-        <label id="lbl-back-groove">Groove / rebate depth <input id="in-back-groove" type="number" min="0" step="1" /></label>
-        <label id="lbl-back-setback">Setback from rear <input id="in-back-setback" type="number" min="0" step="1" /></label>
-        <p class="hint">Overlay = full panel on the rear. Groove/rabbet = inset panel housed in the carcass; depth = how far it sits into the groove, setback = how far it's recessed from the back.</p>
-      </section>
-
       <section class="card" id="card-components">
         <h2>Components</h2>
         <div class="btn-row">
@@ -65,30 +29,9 @@
           <button id="btn-add-drawer" type="button">+ Drawers</button>
           <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="3" /></label>
         </div>
-        <button id="btn-delete" type="button" class="ghost full" disabled>Delete selected</button>
         <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D, click a face to select.</p>
-      </section>
 
-      <section class="card hidden" id="card-selected">
-        <h2 id="sel-title">Selected component</h2>
-        <div id="sel-fields"></div>
-        <p id="sel-derived" class="hint"></p>
-        <div class="btn-row" id="sel-actions">
-          <button id="sel-update" type="button">Update</button>
-          <button id="sel-delete" type="button" class="ghost">Delete</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2>Sheet stock</h2>
-        <label>Sheet width  <input id="in-sw" type="number" min="1" step="1" /></label>
-        <label>Sheet height <input id="in-sh" type="number" min="1" step="1" /></label>
-        <label>Saw kerf <input id="in-kerf" type="number" min="0" step="0.1" /></label>
-        <label class="checkbox"><input id="in-grain" type="checkbox" /> Lock grain (no rotation)</label>
-      </section>
-
-      <section class="card">
-        <h2>Fronts / doors</h2>
+        <h3 class="sub">Doors / fronts</h3>
         <label>Leaves
           <select id="in-door-leaves">
             <option value="1">1 door</option>
@@ -106,12 +49,10 @@
         </div>
         <label>Reveal gap <input id="in-reveal" type="number" min="0" step="0.5" /></label>
         <p class="hint">"+ Door into cell" fits the single clicked bay. Use "Pick cells for door" to combine several bays across shelves into one door. Select a door to change its leaves, front (inset/outset) or Covers.</p>
+
+        <button id="btn-delete" type="button" class="ghost full" disabled>Delete selected</button>
       </section>
 
-      <section class="card">
-        <h2>Edge banding <small>L=length · W=width edges</small></h2>
-        <div id="band-grid" class="band-grid"></div>
-      </section>
     </aside>
 
     <!-- CENTER: CANVAS TABS -->
@@ -119,6 +60,7 @@
       <div class="tabs">
         <button class="tab active" data-tab="design" type="button">Design</button>
         <button class="tab" data-tab="sheet" type="button">Sheet layout</button>
+        <button class="tab" data-tab="setup" type="button">Setup</button>
         <div class="zoom-ctl hidden" id="zoom-ctl" role="group" aria-label="Zoom">
           <button id="zoom-out" type="button" title="Zoom out">−</button>
           <button id="zoom-fit" type="button" title="Fit to view">Fit</button>
@@ -145,6 +87,76 @@
       <div class="canvas-wrap">
         <canvas id="design-canvas" class="view active"></canvas>
         <canvas id="sheet-canvas" class="view"></canvas>
+        <div id="setup-view" class="view setup-view">
+          <p class="setup-intro">One-time project setup. These settings rarely change while you're designing — set them once and they apply everywhere.</p>
+          <div class="setup-grid">
+            <section class="card">
+              <h2>Sizes <small class="unit-label">(mm)</small></h2>
+              <label>Units
+                <div class="unit-toggle" role="group" aria-label="Units">
+                  <button id="unit-mm" class="active" type="button">mm</button>
+                  <button id="unit-in" type="button">inch</button>
+                </div>
+              </label>
+              <label>Type
+                <select id="in-preset">
+                  <option value="base">Base</option>
+                  <option value="wall">Wall</option>
+                  <option value="tall">Tall</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label>Height <input id="in-h" type="number" min="1" step="1" /></label>
+              <label>Width  <input id="in-w" type="number" min="1" step="1" /></label>
+              <label>Depth  <input id="in-d" type="number" min="1" step="1" /></label>
+              <label>Material thickness <input id="in-t" type="number" min="1" step="1" /></label>
+              <label class="checkbox"><input id="in-back" type="checkbox" checked /> Include back panel</label>
+            </section>
+
+            <section class="card" id="card-back">
+              <h2>Back panel <small class="unit-label">(mm)</small></h2>
+              <label>Fixing
+                <select id="in-back-type">
+                  <option value="groove">Groove / dado</option>
+                  <option value="rabbet">Rabbet / rebate</option>
+                  <option value="overlay">Full overlay</option>
+                </select>
+              </label>
+              <label>Back thickness <input id="in-back-thk" type="number" min="1" step="1" /></label>
+              <label id="lbl-back-groove">Groove / rebate depth <input id="in-back-groove" type="number" min="0" step="1" /></label>
+              <label id="lbl-back-setback">Setback from rear <input id="in-back-setback" type="number" min="0" step="1" /></label>
+              <p class="hint">Overlay = full panel on the rear. Groove/rabbet = inset panel housed in the carcass; depth = how far it sits into the groove, setback = how far it's recessed from the back.</p>
+            </section>
+
+            <section class="card">
+              <h2>Sheet stock</h2>
+              <label>Sheet width  <input id="in-sw" type="number" min="1" step="1" /></label>
+              <label>Sheet height <input id="in-sh" type="number" min="1" step="1" /></label>
+              <label>Saw kerf <input id="in-kerf" type="number" min="0" step="0.1" /></label>
+              <label class="checkbox"><input id="in-grain" type="checkbox" /> Lock grain (no rotation)</label>
+              <p class="hint">Defines the panel size and blade width used to nest parts in the Sheet layout tab.</p>
+            </section>
+
+            <section class="card">
+              <h2>Edge banding <small>L=length · W=width edges</small></h2>
+              <div id="band-grid" class="band-grid"></div>
+            </section>
+          </div>
+        </div>
+
+        <!-- Floating glass panel for the selected part (overlays the canvas) -->
+        <div class="sel-overlay hidden" id="card-selected">
+          <div class="sel-head">
+            <h2 id="sel-title">Selected component</h2>
+            <button id="sel-close" type="button" class="sel-close" aria-label="Clear selection" title="Clear selection">✕</button>
+          </div>
+          <div id="sel-fields"></div>
+          <p id="sel-derived" class="hint"></p>
+          <div class="btn-row" id="sel-actions">
+            <button id="sel-update" type="button">Update</button>
+            <button id="sel-delete" type="button" class="ghost">Delete</button>
+          </div>
+        </div>
       </div>
       <div id="sheet-stats" class="stats hidden"></div>
     </section>
