@@ -104,20 +104,24 @@ function normalizeComps() {
 const FLANK_T = 25;   // mm — default thickness of the verticals auto-added beside a drawer
 const partThick = (c) => (c && c.thick != null) ? Math.max(1, c.thick) : S.cab.t;
 // Cell (rectangle) containing point P, bounded by parts whose span crosses P. Excludes excludeId.
-function cellAt(px, py, excludeId) {
+// opts.ignoreShelves / opts.ignoreVerticals let a door span across those dividers (covering several cells).
+function cellAt(px, py, excludeId, opts) {
   const { w, h, t } = S.cab;
+  const ignoreShelves = !!(opts && opts.ignoreShelves), ignoreVerticals = !!(opts && opts.ignoreVerticals);
   let left = t, right = w - t, bottom = t, top = h - t;
   for (const c of S.comps) {
     if (c.id === excludeId) continue;
     const ht = partThick(c) / 2;
-    if (c.type === 'vertical' && c.a0 <= py && py <= c.a1) {
+    if (c.type === 'vertical' && !ignoreVerticals && c.a0 <= py && py <= c.a1) {
       if (c.pos <= px) left = Math.max(left, c.pos + ht); else right = Math.min(right, c.pos - ht);
-    } else if (c.type === 'shelf' && c.a0 <= px && px <= c.a1) {
+    } else if (c.type === 'shelf' && !ignoreShelves && c.a0 <= px && px <= c.a1) {
       if (c.pos <= py) bottom = Math.max(bottom, c.pos + ht); else top = Math.min(top, c.pos - ht);
     }
   }
   return { left, right, bottom, top };
 }
+// What a door covers: 'cell' (default, one opening) | 'column' (ignore shelves) | 'row' (ignore verticals) | 'all' (whole interior).
+const doorCoverOpts = (c) => ({ ignoreShelves: c.covers === 'column' || c.covers === 'all', ignoreVerticals: c.covers === 'row' || c.covers === 'all' });
 // Split [a0,a1] at crossing parts (each {pos,thick} consuming its own thickness). Returns segments {lo,hi,len}.
 function splitSegments(a0, a1, cuts) {
   const list = cuts.filter(c => c.pos > a0 && c.pos < a1).sort((x, y) => x.pos - y.pos);
@@ -134,7 +138,7 @@ const verticalSegments = (c) =>
 // ---------- Doors (cell-bound component, like drawers) ----------
 // A door component fills the cell at its anchor with 1 or 2 leaves (count), inset by the reveal gap.
 function doorRectsFor(c) {
-  const g = S.doors.reveal, cell = cellAt(c.ax, c.ay, null);
+  const g = S.doors.reveal, cell = cellAt(c.ax, c.ay, null, doorCoverOpts(c));
   const x0 = cell.left + g / 2, x1 = cell.right - g / 2, y0 = cell.bottom + g / 2, y1 = cell.top - g / 2;
   if ((c.count | 0) === 2) { const mid = (x0 + x1) / 2; return [{ x0, x1: mid - g / 2, y0, y1, id: c.id, side: 'L' }, { x0: mid + g / 2, x1, y0, y1, id: c.id, side: 'R' }]; }
   return [{ x0, x1, y0, y1, id: c.id, side: '1' }];
@@ -725,10 +729,13 @@ function renderSelectionPanel() {
   const row = (rid, label, val) => `<label class="sel-row"><span>${label}</span><input id="${rid}" type="number" step="${step}" value="${val}"></label>`;
   const sel = (v) => lastAnchor === v ? ' selected' : '';
   if (comp && comp.type === 'door') {
-    const cell = cellAt(comp.ax, comp.ay, null), Wc = cell.right - cell.left, Hc = cell.top - cell.bottom, two = (comp.count | 0) === 2;
+    const cell = cellAt(comp.ax, comp.ay, null, doorCoverOpts(comp)), Wc = cell.right - cell.left, Hc = cell.top - cell.bottom, two = (comp.count | 0) === 2;
+    const cov = comp.covers || 'cell';
+    const optC = (v, lbl) => `<option value="${v}"${cov === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `Door front <small>(${u})</small>`;
     fields.innerHTML =
-      `<label class="sel-row"><span>Leaves</span><select id="sel-leaves"><option value="1"${two ? '' : ' selected'}>1 door</option><option value="2"${two ? ' selected' : ''}>2 doors</option></select></label>`;
+      `<label class="sel-row"><span>Leaves</span><select id="sel-leaves"><option value="1"${two ? '' : ' selected'}>1 door</option><option value="2"${two ? ' selected' : ''}>2 doors</option></select></label>` +
+      `<label class="sel-row"><span>Covers</span><select id="sel-covers">${optC('cell', 'This cell')}${optC('column', 'Full column (ignore shelves)')}${optC('row', 'Full row (ignore verticals)')}${optC('all', 'Whole interior')}</select></label>`;
     derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)} · reveal ${fmtU(S.doors.reveal)} (set in Fronts / doors).`;
     actions.classList.remove('hidden');
   } else if (comp && comp.type === 'drawer') {
@@ -785,7 +792,11 @@ function applySelectedEdit() {
   const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null;
   if (!c) return;
   const get = (rid) => { const el = $(rid); return el ? toMM(parseFloat(el.value) || 0) : 0; };
-  if (c.type === 'door') { c.count = parseInt(($('sel-leaves') || {}).value, 10) === 2 ? 2 : 1; render(); return; }
+  if (c.type === 'door') {
+    c.count = parseInt(($('sel-leaves') || {}).value, 10) === 2 ? 2 : 1;
+    const cov = (($('sel-covers') || {}).value) || 'cell'; if (cov === 'cell') delete c.covers; else c.covers = cov;
+    render(); return;
+  }
   if (c.type === 'drawer') {
     const cnt = parseInt(($('sel-count') || {}).value, 10) || 1; c.count = Math.max(1, Math.min(12, cnt));
     c.valign = (($('sel-valign') || {}).value) || 'bottom';
@@ -829,7 +840,7 @@ function hitTest(mx, my) {
   for (let i = S.comps.length - 1; i >= 0; i--) {
     const c = S.comps[i];
     if (c.type === 'drawer') { const cl = drawerRect(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
-    if (c.type === 'door') { const cl = cellAt(c.ax, c.ay, null); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
+    if (c.type === 'door') { const cl = cellAt(c.ax, c.ay, null, doorCoverOpts(c)); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
     const r = partRect(c); if (mx >= r.x0 - tol && mx <= r.x1 + tol && my >= r.y0 - tol && my <= r.y1 + tol) return c;
   }
   return null;
@@ -969,10 +980,11 @@ btnDelete.addEventListener('click', deleteSelected);
 $('sel-update').addEventListener('click', applySelectedEdit);
 $('sel-delete').addEventListener('click', deleteSelected);
 $('sel-fields').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applySelectedEdit(); } });
-// Drawer banks apply live as you type / change the anchor (other parts still use the Update button).
+// Drawer banks apply live as you type; drawer + door dropdowns apply on change (other parts still use the Update button).
 const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if (c && c.type === 'drawer') applySelectedEdit(); };
+const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if (c && (c.type === 'drawer' || c.type === 'door')) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
-$('sel-fields').addEventListener('change', liveDrawer);
+$('sel-fields').addEventListener('change', liveChange);
 $('btn-save').addEventListener('click', save);
 $('btn-load').addEventListener('click', load);
 $('btn-reset').addEventListener('click', reset);
