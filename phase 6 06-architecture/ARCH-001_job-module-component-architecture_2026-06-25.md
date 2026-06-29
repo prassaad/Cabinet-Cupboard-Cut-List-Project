@@ -3,8 +3,8 @@ title: "ARCH-001 — Job ▸ Module ▸ Component Architecture (room-level desig
 phase: 06_architecture
 created: 2026-06-25
 updated: 2026-06-29
-version: 1.2
-status: PHASES 1–2 IMPLEMENTED — Job▸Module wrapper + switcher (P1) and job-wide cut list / cross-module sheet nesting / BOM rollup (P2) live in prototype/ (single-module behaviour unchanged). Phases 3–5 not started.
+version: 1.3
+status: PHASES 1–3 IMPLEMENTED — P1 Job▸Module wrapper + switcher, P2 job-wide cut list / cross-module nesting / BOM rollup, P3 Room (run elevation) linked view, all live in prototype/ (single-module behaviour unchanged). P3 is 2D elevation, manual base-height; plan/walls (P4) and 3D room not started.
 related:
   - phase 1-2 02-elicitation/session-notes/NOTES-002_Client-Review_2026-06-25.md
   - prototype/app.js
@@ -162,6 +162,14 @@ Module {                       // ~= today's S.cab + parts
 ---
 
 ## Version history
+- **v1.3 (2026-06-29)** — **Phase 3 implemented** (the "see the whole wall" view) in `prototype/`: a new **Room
+  tab** composes every module side-by-side as a **front elevation on one floor line**, reusing the per-module
+  renderer via `withModule` + a world→screen transform (no renderer duplicated). Each module carries
+  **`placement {offsetX, baseHeight}`** (persisted in the job). Per the client decision, all modules sit on the
+  floor by default and **base height is manual** — drag a cabinet horizontally to position, drag up to lift/stack
+  (snaps to floor < 30 mm); click selects/activates a module (jumps the editor to it). Room view has its own
+  zoom (wheel) + pan (drag empty space). Started as **run-based 2D elevation** per §4 recommendation. Not yet:
+  3D room compose, auto base-height-by-type, snapping/abutment between modules, plan + walls (Phase 4).
 - **v1.2 (2026-06-29)** — **Phase 2 implemented** in `prototype/` (the headline ROI: fewer sheets). Added a
   **Module ⇄ Job scope toggle** on the cut-list panel that governs the cut list, summary, Sheet-layout tab,
   CSV/PDF export and AI BOM. In Job scope: a **consolidated job cut list**, **totals summed per-module** (so

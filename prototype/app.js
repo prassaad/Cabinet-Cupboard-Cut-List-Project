@@ -64,9 +64,10 @@ const inW = $('in-w'), inH = $('in-h'), inD = $('in-d'), inT = $('in-t'), inBack
 const inSW = $('in-sw'), inSH = $('in-sh'), inKerf = $('in-kerf'), inGrain = $('in-grain'), inPreset = $('in-preset');
 const inReveal = $('in-reveal'), inExplode = $('in-explode'), inDims = $('in-dims');
 const inBackType = $('in-back-type'), inBackThk = $('in-back-thk'), inBackGroove = $('in-back-groove'), inBackSetback = $('in-back-setback');
-const designCanvas = $('design-canvas'), sheetCanvas = $('sheet-canvas');
+const designCanvas = $('design-canvas'), sheetCanvas = $('sheet-canvas'), roomCanvas = $('room-canvas');
 const dctx = designCanvas.getContext('2d');
 const sctx = sheetCanvas.getContext('2d');
+const rctx = roomCanvas.getContext('2d');
 const btnDelete = $('btn-delete');
 
 // ---------- Units ----------
@@ -722,12 +723,103 @@ function renderSheet(pack) {
   });
 }
 
+// ---------- Room / Run view (ARCH-001 phase 3) ----------
+// Composes every module side-by-side on one floor line (front elevation). Each module carries
+// placement {offsetX, baseHeight}; baseHeight is set manually (drag up) so users stack as they like.
+let lastRoomRects = [], lastRoomScale = 1, roomView = { zoom: 1, pan: { x: 0, y: 0 } }, roomDrag = null;
+function modPlace(m) { if (!m.placement) m.placement = { offsetX: 0, baseHeight: 0 }; return m.placement; }
+function ensureRunLayout() {   // give any module without a placement the next slot to the right, on the floor
+  let cursor = 0;
+  JOB.modules.forEach(m => {
+    if (!m.placement) m.placement = { offsetX: cursor, baseHeight: 0 };
+    cursor = Math.max(cursor, m.placement.offsetX + m.cab.w);
+  });
+}
+function roomBBox() {
+  let maxX = 1, maxY = 1;
+  JOB.modules.forEach(m => { const p = modPlace(m); maxX = Math.max(maxX, p.offsetX + m.cab.w); maxY = Math.max(maxY, p.baseHeight + m.cab.h); });
+  return { w: maxX, h: maxY };
+}
+function fillRectWorld(ctx, r, fill, stroke, tf) {
+  const a = tf(r.x0, r.y1), b = tf(r.x1, r.y0);   // (x0,y1)=top-left, (x1,y0)=bottom-right in screen space
+  const x = a[0], y = a[1], wpx = b[0] - a[0], hpx = b[1] - a[1];
+  if (fill) { ctx.fillStyle = fill; ctx.fillRect(x, y, wpx, hpx); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.5, y + 0.5, wpx - 1, hpx - 1); }
+}
+// Draws one module's front elevation through `worldToScreen`, reusing the per-module geometry helpers.
+function drawModuleElevation(ctx, m, worldToScreen) {
+  const p = modPlace(m);
+  const tf = (xmm, ymm) => worldToScreen(p.offsetX + xmm, p.baseHeight + ymm);
+  withModule(m, () => {
+    const { w, h, t } = S.cab, fillR = (r, f, s) => fillRectWorld(ctx, r, f, s, tf);
+    fillR({ x0: t, x1: w - t, y0: t, y1: h - t }, '#222831', null);
+    const wall = '#6b7686', wline = '#aeb7c6';
+    fillR({ x0: 0, x1: t, y0: 0, y1: h }, wall, wline);
+    fillR({ x0: w - t, x1: w, y0: 0, y1: h }, wall, wline);
+    fillR({ x0: t, x1: w - t, y0: 0, y1: t }, wall, wline);
+    fillR({ x0: t, x1: w - t, y0: h - t, y1: h }, wall, wline);
+    for (const c of S.comps) { if (c.type === 'drawer') continue; fillR(partRect(c), '#cba03a', '#f1e4ba'); }
+    for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFronts(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, 'rgba(203,160,58,0.92)', '#f1e4ba');
+    for (const r of doorRects()) fillR({ x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y1 }, 'rgba(190,160,105,0.30)', '#d9c08a');
+  });
+}
+function renderRoom() {
+  const { cw, ch } = fitCanvas(roomCanvas, rctx);
+  rctx.clearRect(0, 0, cw, ch);
+  if (!JOB.modules.length) return;
+  ensureRunLayout();
+  const bb = roomBBox(), pad = 72;
+  const baseScale = Math.min((cw - 2 * pad) / bb.w, (ch - 2 * pad) / bb.h);
+  const scale = Math.max(0.0001, baseScale) * roomView.zoom; lastRoomScale = scale;
+  const totalW = bb.w * scale, ox = (cw - totalW) / 2 + roomView.pan.x, floorY = ch - pad + roomView.pan.y;
+  const worldToScreen = (wx, wy) => [ox + wx * scale, floorY - wy * scale];
+  rctx.strokeStyle = '#5b6573'; rctx.lineWidth = 1; rctx.beginPath(); rctx.moveTo(ox - 24, floorY + 0.5); rctx.lineTo(ox + totalW + 24, floorY + 0.5); rctx.stroke();
+  lastRoomRects = [];
+  JOB.modules.forEach((m, i) => {
+    drawModuleElevation(rctx, m, worldToScreen);
+    const p = modPlace(m), tl = worldToScreen(p.offsetX, p.baseHeight + m.cab.h), br = worldToScreen(p.offsetX + m.cab.w, p.baseHeight);
+    const rx = tl[0], ry = tl[1], rw = br[0] - tl[0], rh = br[1] - tl[1];
+    lastRoomRects.push({ i, x: rx, y: ry, w: rw, h: rh });
+    if (i === JOB.active) { rctx.strokeStyle = '#ffb454'; rctx.lineWidth = 2; rctx.strokeRect(rx + 1, ry + 1, rw - 2, rh - 2); }
+    rctx.fillStyle = i === JOB.active ? '#ffd9a0' : '#9aa3b2'; rctx.font = '12px system-ui, sans-serif'; rctx.textAlign = 'center';
+    rctx.fillText(`${m.name || `Module ${i + 1}`} · ${fmt(m.cab.w)}×${fmt(m.cab.h)}`, rx + rw / 2, ry - 8);
+    if (p.baseHeight > 0) rctx.fillText(`↑ ${fmtU(p.baseHeight)}`, rx + rw / 2, br[1] + 16);
+  });
+  rctx.fillStyle = '#9aa3b2'; rctx.font = '12px system-ui, sans-serif'; rctx.textAlign = 'left';
+  rctx.fillText('Room · drag a cabinet to position · drag up to lift (manual stack) · click to make it active', 12, ch - 12);
+}
+const roomXY = (e) => { const r = roomCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+roomCanvas.addEventListener('mousedown', (e) => {
+  const { x, y } = roomXY(e); let hit = null;
+  for (let i = lastRoomRects.length - 1; i >= 0; i--) { const r = lastRoomRects[i]; if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { hit = r; break; } }
+  if (hit) roomDrag = { type: 'module', mi: hit.i, sx: e.clientX, sy: e.clientY, start: { ...modPlace(JOB.modules[hit.i]) }, moved: 0 };
+  else roomDrag = { type: 'pan', x: e.clientX, y: e.clientY };
+  roomCanvas.style.cursor = 'grabbing';
+});
+window.addEventListener('mousemove', (e) => {
+  if (!roomDrag) return;
+  if (roomDrag.type === 'pan') { roomView.pan.x += e.clientX - roomDrag.x; roomView.pan.y += e.clientY - roomDrag.y; roomDrag.x = e.clientX; roomDrag.y = e.clientY; renderRoom(); return; }
+  const dx = (e.clientX - roomDrag.sx) / lastRoomScale, dUp = -(e.clientY - roomDrag.sy) / lastRoomScale;
+  roomDrag.moved += Math.abs(e.clientX - roomDrag.sx) + Math.abs(e.clientY - roomDrag.sy);
+  const p = modPlace(JOB.modules[roomDrag.mi]);
+  p.offsetX = Math.max(0, roomDrag.start.offsetX + dx);
+  let bh = Math.max(0, roomDrag.start.baseHeight + dUp); if (bh < 30) bh = 0;   // snap to the floor
+  p.baseHeight = bh; renderRoom();
+});
+window.addEventListener('mouseup', () => {
+  if (!roomDrag) return;
+  if (roomDrag.type === 'module' && roomDrag.moved < 5 && roomDrag.mi !== JOB.active) switchTo(roomDrag.mi);
+  roomDrag = null; roomCanvas.style.cursor = 'grab';
+});
+roomCanvas.addEventListener('wheel', (e) => { e.preventDefault(); const f = e.deltaY < 0 ? 1.12 : 1 / 1.12; roomView.zoom = Math.max(0.3, Math.min(6, roomView.zoom * f)); renderRoom(); }, { passive: false });
+
 // ---------- Master render ----------
 function render() {
   const pack = renderCutList();
   const designActive = designCanvas.classList.contains('active');
   if (designActive) (S.viewMode === '3d' ? renderDesign3D : renderDesign)();
   if (sheetCanvas.classList.contains('active')) renderSheet(pack);
+  if (roomCanvas.classList.contains('active')) renderRoom();
   $('view-toggle').classList.toggle('hidden', !designActive);
   $('zoom-ctl').classList.toggle('hidden', !designActive);
   $('explode-wrap').classList.toggle('hidden', !(designActive && S.viewMode === '3d'));
@@ -1067,9 +1159,10 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   if (cellMode && tab.dataset.tab !== 'design') setCellMode(false);
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   tab.classList.add('active');
-  if (tab.dataset.tab === 'setup') S.selectedId = null;   // close the floating property sheet — it'd cover the Setup form
+  if (tab.dataset.tab === 'setup' || tab.dataset.tab === 'room') S.selectedId = null;   // these views have no part selection; close the floating sheet
   designCanvas.classList.toggle('active', tab.dataset.tab === 'design');
   sheetCanvas.classList.toggle('active', tab.dataset.tab === 'sheet');
+  roomCanvas.classList.toggle('active', tab.dataset.tab === 'room');
   $('setup-view').classList.toggle('active', tab.dataset.tab === 'setup');
   render();
 }));
@@ -1402,5 +1495,18 @@ function setCutScope(s) {
 $('scope-module').addEventListener('click', () => setCutScope('module'));
 $('scope-job').addEventListener('click', () => setCutScope('job'));
 
+// ---------- Demo seed (opt-in via ?demo) ----------
+// Builds a small 3-cabinet run so the Room/stack view has something to show. Only runs when the
+// URL has ?demo — normal load is unaffected. Nothing is saved unless the user clicks Save.
+function bootDemo() {
+  Cabinet.setDimensions({ width: 600, height: 720, depth: 560 }); Cabinet.addShelves(2);
+  addModule(); Cabinet.setDimensions({ width: 800, height: 720, depth: 320 }); Cabinet.addShelves(1); Cabinet.setDoors(2);
+  addModule(); Cabinet.setDimensions({ width: 500, height: 2100, depth: 580 }); Cabinet.addVerticals(1);
+  ensureRunLayout(); if (JOB.modules[1]) JOB.modules[1].placement.baseHeight = 1500;   // lift module 2 as a wall cabinet
+  switchTo(0);
+  const roomTab = document.querySelector('.tab[data-tab="room"]'); if (roomTab) roomTab.click();
+}
+
 // ---------- Boot ----------
 buildBandGrid(); renderModuleBar(); syncInputs(); render();
+if (/[?&]demo\b/i.test(location.search)) bootDemo();

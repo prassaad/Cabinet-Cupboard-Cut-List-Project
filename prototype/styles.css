@@ -159,6 +159,7 @@ select {
 canvas.view { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
 canvas.view.active { display: block; }
 #design-canvas { cursor: grab; }
+#room-canvas { cursor: grab; }
 #sheet-canvas { cursor: pointer; }
 
 /* Setup tab (relocated set-once panels) */
