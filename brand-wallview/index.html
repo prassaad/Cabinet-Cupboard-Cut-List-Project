@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WallView — Cabinet &amp; Cupboard Cut Lists · Scale · Design · Cut</title>
+  <meta name="description" content="WallView turns cabinet designs into accurate cut lists, optimised sheet layouts and priced BOMs. Parametric 2D/3D design, edge banding, whole-wall room view — in your browser." />
+  <link rel="icon" type="image/svg+xml" href="wallview-icon.svg" />
+  <style>
+    :root{
+      --bg:#1a1f26; --panel:#222831; --card:#2a313b; --line:#39424f;
+      --ink:#e9edf3; --muted:#8a93a2; --amber:#e0a93a; --amber2:#e8b248;
+      --cream:#f1e4ba; --steel:#aeb7c6;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{margin:0;background:var(--bg);color:var(--ink);
+      font:16px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    .wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+
+    /* ---- nav ---- */
+    .nav{position:sticky;top:0;z-index:10;background:rgba(26,31,38,.82);
+      backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+    .nav .wrap{display:flex;align-items:center;justify-content:space-between;height:64px}
+    .nav img{height:34px;display:block}
+    .nav-links{display:flex;align-items:center;gap:26px}
+    .nav-links a{color:var(--muted);font-size:14px}
+    .nav-links a:hover{color:var(--ink)}
+    .btn{display:inline-flex;align-items:center;gap:8px;border-radius:8px;
+      padding:10px 18px;font-weight:600;font-size:15px;cursor:pointer;border:1px solid transparent;transition:.15s}
+    .btn-amber{background:var(--amber);color:#2a1d02}
+    .btn-amber:hover{background:var(--amber2)}
+    .btn-ghost{background:transparent;border-color:var(--line);color:var(--ink)}
+    .btn-ghost:hover{border-color:var(--amber);color:var(--amber)}
+    .nav .btn{padding:8px 16px}
+
+    /* ---- hero ---- */
+    .hero{padding:72px 0 40px}
+    .hero .wrap{display:grid;grid-template-columns:1.05fr .95fr;gap:48px;align-items:center}
+    .chip{display:inline-block;font-size:12px;letter-spacing:3px;font-weight:700;
+      color:var(--amber);background:#e0a93a14;border:1px solid #e0a93a3a;padding:5px 12px;border-radius:999px}
+    h1{font-size:48px;line-height:1.08;margin:18px 0 16px;letter-spacing:-1px}
+    h1 .accent{color:var(--amber2)}
+    .lead{font-size:18px;color:var(--steel);max-width:30em;margin:0 0 26px}
+    .cta-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .note{color:var(--muted);font-size:13px;margin-top:16px}
+    .note b{color:var(--cream);font-weight:600}
+    .poweredby{display:flex;align-items:center;gap:12px;margin-top:26px}
+    .poweredby span{color:var(--muted);font-size:13px}
+    .poweredby img{height:46px;display:block}
+
+    /* ---- hero art ---- */
+    .art{position:relative;background:linear-gradient(160deg,#262d37,#1d232b);
+      border:1px solid var(--line);border-radius:16px;padding:26px;box-shadow:0 24px 60px #0006}
+    .art svg{display:block;width:100%;height:auto}
+    .art .cutcard{position:absolute;right:-14px;bottom:-16px;width:200px;background:rgba(34,40,49,.92);
+      backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:12px;padding:12px 14px;box-shadow:0 12px 30px #0007}
+    .cutcard h4{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+    .cutcard .r{display:flex;justify-content:space-between;font-size:12.5px;padding:3px 0;border-bottom:1px solid #ffffff10}
+    .cutcard .r span:last-child{color:var(--cream)}
+    .cutcard .tot{margin-top:8px;font-size:12px;color:var(--amber2);font-weight:600}
+
+    /* ---- sections ---- */
+    section.block{padding:56px 0}
+    .eyebrow{text-align:center;font-size:12px;letter-spacing:3px;color:var(--muted);text-transform:uppercase;font-weight:700}
+    h2{text-align:center;font-size:32px;margin:8px 0 8px;letter-spacing:-.5px}
+    .sub{text-align:center;color:var(--muted);max-width:46em;margin:0 auto 38px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+    .feat{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
+    .feat .ic{width:40px;height:40px;border-radius:10px;background:#e0a93a16;border:1px solid #e0a93a33;
+      display:flex;align-items:center;justify-content:center;margin-bottom:14px;color:var(--amber)}
+    .feat h3{margin:0 0 6px;font-size:17px}
+    .feat p{margin:0;color:var(--muted);font-size:14.5px}
+
+    /* ---- steps ---- */
+    .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:8px}
+    .step{text-align:center;padding:18px}
+    .step .n{width:46px;height:46px;margin:0 auto 12px;border-radius:50%;border:1px solid var(--amber);
+      color:var(--amber);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px}
+    .step h3{margin:0 0 4px;font-size:18px}
+    .step p{margin:0;color:var(--muted);font-size:14px}
+
+    /* ---- cta band ---- */
+    .band{background:linear-gradient(135deg,#2a313b,#222831);border:1px solid var(--line);
+      border-radius:18px;padding:44px;text-align:center}
+    .band h2{margin:0 0 10px}
+    .band p{color:var(--steel);margin:0 0 22px}
+
+    /* ---- footer ---- */
+    footer{border-top:1px solid var(--line);margin-top:40px;padding:30px 0;color:var(--muted);font-size:13.5px}
+    footer .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    footer img{height:30px;opacity:.92}
+
+    @media(max-width:860px){
+      .hero .wrap{grid-template-columns:1fr;gap:36px}
+      h1{font-size:38px}
+      .grid,.steps{grid-template-columns:1fr}
+      .nav-links a{display:none}
+    }
+  </style>
+</head>
+<body>
+  <!-- ===== Nav ===== -->
+  <header class="nav">
+    <div class="wrap">
+      <a href="#top" aria-label="WallView home"><img src="wallview-logo.svg" alt="WallView" /></a>
+      <nav class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a class="btn btn-amber" data-launch href="#">Launch app</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- ===== Hero ===== -->
+  <main id="top">
+    <section class="hero">
+      <div class="wrap">
+        <div>
+          <span class="chip">SCALE · DESIGN · CUT</span>
+          <h1>Cabinet cut lists,<br><span class="accent">done in minutes.</span></h1>
+          <p class="lead">Draw a cabinet in 2D or 3D and WallView instantly gives you an accurate cut list,
+            an optimised sheet layout and a priced bill of materials — kerf, grain and edge banding included.</p>
+          <div class="cta-row">
+            <a class="btn btn-amber" data-launch href="#">Launch the app →</a>
+            <a class="btn btn-ghost" href="#features">See what it does</a>
+          </div>
+          <p class="note">Runs in your browser · works <b>offline</b> · no install required.</p>
+          <div class="poweredby">
+            <span>Powered by</span>
+            <img src="sky-logo.svg" alt="Sky Furnitures" />
+          </div>
+        </div>
+
+        <!-- on-brand app illustration: cabinet elevation + floating cut-list card -->
+        <div class="art">
+          <svg viewBox="0 0 420 300" role="img" aria-label="Cabinet design preview">
+            <rect x="0" y="0" width="420" height="300" rx="10" fill="#1b212a"/>
+            <!-- carcass -->
+            <g stroke="#aeb7c6" stroke-width="2" fill="#222831">
+              <rect x="70" y="36" width="220" height="228" rx="4"/>
+            </g>
+            <rect x="82" y="48" width="196" height="204" fill="#1b212a"/>
+            <!-- shelves + divider in amber -->
+            <g fill="#cba03a" stroke="#f1e4ba" stroke-width="1.2">
+              <rect x="82" y="112" width="196" height="13"/>
+              <rect x="82" y="178" width="196" height="13"/>
+              <rect x="176" y="191" width="13" height="61"/>
+            </g>
+            <!-- dimension hints -->
+            <g stroke="#6b7686" stroke-width="1">
+              <line x1="70" y1="22" x2="290" y2="22"/>
+              <line x1="70" y1="17" x2="70" y2="27"/><line x1="290" y1="17" x2="290" y2="27"/>
+              <line x1="44" y1="36" x2="44" y2="264"/>
+              <line x1="39" y1="36" x2="49" y2="36"/><line x1="39" y1="264" x2="49" y2="264"/>
+            </g>
+            <text x="180" y="18" text-anchor="middle" fill="#9aa3b2" font-size="11" font-family="system-ui">W 1200 mm</text>
+            <text x="30" y="154" text-anchor="middle" fill="#9aa3b2" font-size="11" font-family="system-ui" transform="rotate(-90 30 154)">H 2400 mm</text>
+          </svg>
+          <div class="cutcard">
+            <h4>Cut list</h4>
+            <div class="r"><span>Side ×2</span><span>2400 × 580</span></div>
+            <div class="r"><span>Shelf ×2</span><span>1160 × 560</span></div>
+            <div class="r"><span>Back ×1</span><span>1176 × 2376</span></div>
+            <div class="tot">3 sheets · 82% used</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Features ===== -->
+    <section class="block" id="features">
+      <div class="wrap">
+        <p class="eyebrow">Everything from sketch to shop floor</p>
+        <h2>One tool, the whole job</h2>
+        <p class="sub">Parametric design feeds every output live — change a dimension and the cut list,
+          sheet layout and costing update instantly.</p>
+        <div class="grid">
+          <div class="feat">
+            <div class="ic">▢</div>
+            <h3>2D &amp; 3D design</h3>
+            <p>Drag shelves, verticals, drawers and doors inside a parametric carcass. Orbit it in 3D and pick any face.</p>
+          </div>
+          <div class="feat">
+            <div class="ic">≣</div>
+            <h3>Live cut list</h3>
+            <p>Every part sized to the millimetre with quantities and banded edges — recalculated on every edit.</p>
+          </div>
+          <div class="feat">
+            <div class="ic">▦</div>
+            <h3>Sheet nesting</h3>
+            <p>Kerf-aware, grain-lock optimisation packs parts onto the fewest sheets and reports utilisation.</p>
+          </div>
+          <div class="feat">
+            <div class="ic">▥</div>
+            <h3>Edge banding &amp; BOM</h3>
+            <p>Per-edge banding totals plus a priced bill of materials with inferred hinges, handles and fixings.</p>
+          </div>
+          <div class="feat">
+            <div class="ic">▤</div>
+            <h3>Job ▸ Module ▸ Room</h3>
+            <p>Compose many cabinets into one wall view and roll the whole job into a single optimised cut list.</p>
+          </div>
+          <div class="feat">
+            <div class="ic">↧</div>
+            <h3>Export CSV &amp; PDF</h3>
+            <p>Hand the shop a clean cut list and sheet layout as CSV or a print-ready PDF in one click.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== How it works ===== -->
+    <section class="block" id="how">
+      <div class="wrap">
+        <p class="eyebrow">Three steps</p>
+        <h2>Scale · Design · Cut</h2>
+        <div class="steps">
+          <div class="step"><div class="n">1</div><h3>Scale</h3><p>Set the cabinet sizes and units — millimetres or inches — and your sheet stock.</p></div>
+          <div class="step"><div class="n">2</div><h3>Design</h3><p>Drop in shelves, dividers, drawers and doors; compose modules into a whole wall.</p></div>
+          <div class="step"><div class="n">3</div><h3>Cut</h3><p>Read the optimised cut list and sheet layout, export CSV/PDF, and head to the saw.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== CTA band ===== -->
+    <section class="block">
+      <div class="wrap">
+        <div class="band">
+          <h2>Ready to cut?</h2>
+          <p>Open WallView in your browser — nothing to install.</p>
+          <a class="btn btn-amber" data-launch href="#">Launch the app →</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== Footer ===== -->
+  <footer>
+    <div class="wrap">
+      <img src="wallview-logo.svg" alt="WallView" />
+      <span>© 2026 Standscale · WallView — Scale · Design · Cut · Powered by Sky Furnitures</span>
+    </div>
+  </footer>
+
+  <script>
+    /* Where the WallView app is served. */
+    const APP_URL = 'http://wallview.standscale.com/app/';
+    document.querySelectorAll('[data-launch]').forEach(a => { a.href = APP_URL; });
+  </script>
+</body>
+</html>

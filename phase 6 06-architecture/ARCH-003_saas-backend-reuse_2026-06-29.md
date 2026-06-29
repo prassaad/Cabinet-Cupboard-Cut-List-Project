@@ -257,6 +257,9 @@ risks — and it composes cleanly with ARCH-001's job hierarchy and ARCH-002's t
 ---
 
 ## Version history
+- **v1.2 (2026-06-29)** — Superset spec added: **[ARCH-004]** details the thin-client/whole-engine boundary
+  (all math server-side), the engine API contract, the canonical design/render models, and **multi-tenancy on
+  both FE and BE**. ARCH-004 builds on this doc's §6 (engine), §8 (isolation) and §8.1 (URL routing).
 - **v1.1 (2026-06-29)** — Added **§8.1 URL & tenant routing**: locked **path-based `/api/v1/...`** over
   subdomain-per-tenant (tenant resolved from the JWT claim, not the URL; subdomain slug if path-scoped;
   Bearer auth; mandatory `url_tenant === token_tenant` IDOR guard). Reflected in the security checklist,

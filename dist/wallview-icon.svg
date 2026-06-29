@@ -1,0 +1,13 @@
+<svg width="96" height="96" viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WallView icon">
+  <rect x="0" y="0" width="96" height="96" rx="22" fill="#222831"/>
+  <rect x="12" y="12" width="72" height="72" rx="12" fill="none" stroke="#39424f" stroke-width="2.5"/>
+  <!-- a run of cabinets seen in elevation -->
+  <g stroke="#e0a93a" stroke-width="3.6" stroke-linejoin="round" fill="none">
+    <rect x="21" y="50" width="17" height="22"/>            <!-- base cabinet -->
+    <rect x="41" y="28" width="17" height="44"/>            <!-- tall cabinet -->
+    <rect x="61" y="40" width="14" height="32"/>            <!-- wall cabinet -->
+    <path d="M41 50 H58"/>                                  <!-- a shelf in the tall unit -->
+  </g>
+  <!-- floor line -->
+  <path d="M16 72 H80" stroke="#f1e4ba" stroke-width="3.2" stroke-linecap="round"/>
+</svg>

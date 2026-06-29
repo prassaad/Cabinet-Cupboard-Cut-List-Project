@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WallView — Cabinet &amp; Cupboard Cut List</title>
+  <link rel="icon" type="image/svg+xml" href="wallview-icon.svg" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1><img src="wallview-icon.svg" alt="" style="height:26px;width:26px;vertical-align:middle;margin-right:8px;border-radius:6px" />WallView</h1>
+    <div class="top-actions">
+      <!-- AI Design Copilot is disabled in this static build (it needs the Node proxy in server/server.js).
+           To enable: host server/server.js, then restore the button below, the #ai-panel section,
+           and <script src="ai.js"></script> — and upload ai.js alongside these files. -->
+      <button id="btn-save" type="button">Save</button>
+      <button id="btn-load" type="button">Load</button>
+      <button id="btn-reset" type="button" class="ghost">Reset</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- LEFT: SIZES + COMPONENTS -->
+    <aside class="panel left">
+      <section class="card" id="card-components">
+        <h2>Components</h2>
+        <div class="btn-row">
+          <button id="btn-add-shelf" type="button">+ Shelf</button>
+          <button id="btn-add-vertical" type="button">+ Vertical</button>
+        </div>
+        <div class="btn-row drawer-row">
+          <button id="btn-add-drawer" type="button">+ Drawers</button>
+          <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="3" /></label>
+        </div>
+        <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D, click a face to select.</p>
+
+        <h3 class="sub">Doors / fronts</h3>
+        <label>Leaves
+          <select id="in-door-leaves">
+            <option value="1">1 door</option>
+            <option value="2">2 doors</option>
+          </select>
+        </label>
+        <button id="btn-add-door" type="button" class="full">+ Door into cell</button>
+        <button id="btn-door-cells" type="button" class="full">⊞ Pick cells for door</button>
+        <div id="door-cells-bar" class="hidden">
+          <p class="hint">Click bays in the design to combine them, then place one door spanning the picked region (it crosses the shelves you included, and stops at the ones you left out).</p>
+          <div class="btn-row">
+            <button id="btn-door-place" type="button" disabled>Place door (0)</button>
+            <button id="btn-door-cancel" type="button" class="ghost">Cancel</button>
+          </div>
+        </div>
+        <label>Reveal gap <input id="in-reveal" type="number" min="0" step="0.5" /></label>
+        <p class="hint">"+ Door into cell" fits the single clicked bay. Use "Pick cells for door" to combine several bays across shelves into one door. Select a door to change its leaves, front (inset/outset) or Covers.</p>
+
+        <button id="btn-delete" type="button" class="ghost full" disabled>Delete selected</button>
+      </section>
+
+    </aside>
+
+    <!-- CENTER: CANVAS TABS -->
+    <section class="center">
+      <!-- Job ▸ Module switcher: each chip is one cabinet/module in this job -->
+      <div class="module-bar" id="module-bar"></div>
+      <!-- Small panel shown when adding a module: capture code + name (only name is shown in the list) -->
+      <div class="module-add-panel hidden" id="module-add-panel">
+        <span class="map-title">New module</span>
+        <label class="map-field">Code <input id="mod-code" type="text" maxlength="20" placeholder="e.g. C01" /></label>
+        <label class="map-field">Name <input id="mod-name" type="text" maxlength="40" placeholder="Module name" /></label>
+        <button id="mod-add-confirm" type="button">Add</button>
+        <button id="mod-add-cancel" type="button" class="ghost">Cancel</button>
+      </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="design" type="button">Design</button>
+        <button class="tab" data-tab="room" type="button">Room</button>
+        <button class="tab" data-tab="sheet" type="button">Sheet layout</button>
+        <button class="tab" data-tab="setup" type="button">Setup</button>
+        <div class="zoom-ctl hidden" id="zoom-ctl" role="group" aria-label="Zoom">
+          <button id="zoom-out" type="button" title="Zoom out">−</button>
+          <button id="zoom-fit" type="button" title="Fit to view">Fit</button>
+          <button id="zoom-in" type="button" title="Zoom in">+</button>
+        </div>
+        <div class="view-toggle" id="view-toggle" role="group" aria-label="View">
+          <button id="v2d" class="active" type="button" title="2D view" aria-label="2D view">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="1.5" />
+              <line x1="3" y1="9" x2="21" y2="9" />
+              <line x1="9" y1="9" x2="9" y2="21" />
+            </svg>
+          </button>
+          <button id="v3d" type="button" title="3D view" aria-label="3D view">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 2 L21 7 V17 L12 22 L3 17 V7 Z" />
+              <path d="M12 2 L12 12 M12 12 L21 7 M12 12 L3 7" />
+            </svg>
+          </button>
+        </div>
+        <label class="explode hidden" id="explode-wrap">Explode <input id="in-explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
+        <label class="explode hidden" id="dims-wrap">Dimensions <span class="switch"><input id="in-dims" type="checkbox" checked /><span class="slider"></span></span></label>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="design-canvas" class="view active"></canvas>
+        <canvas id="room-canvas" class="view"></canvas>
+        <canvas id="sheet-canvas" class="view"></canvas>
+        <div id="setup-view" class="view setup-view">
+          <p class="setup-empty">No module selected. Click <b>+ Module</b> above to add one, then configure its sizes, back panel, sheet stock and banding here.</p>
+          <p class="setup-intro">One-time project setup. These settings rarely change while you're designing — set them once and they apply everywhere.</p>
+          <div class="setup-grid">
+            <section class="card">
+              <h2>Sizes <small class="unit-label">(mm)</small></h2>
+              <label>Units
+                <div class="unit-toggle" role="group" aria-label="Units">
+                  <button id="unit-mm" class="active" type="button">mm</button>
+                  <button id="unit-in" type="button">inch</button>
+                </div>
+              </label>
+              <label>Type
+                <select id="in-preset">
+                  <option value="base">Base</option>
+                  <option value="wall">Wall</option>
+                  <option value="tall">Tall</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label>Height <input id="in-h" type="number" min="1" step="1" /></label>
+              <label>Width  <input id="in-w" type="number" min="1" step="1" /></label>
+              <label>Depth  <input id="in-d" type="number" min="1" step="1" /></label>
+              <label>Material thickness <input id="in-t" type="number" min="1" step="1" /></label>
+              <label class="checkbox"><input id="in-back" type="checkbox" checked /> Include back panel</label>
+            </section>
+
+            <section class="card" id="card-back">
+              <h2>Back panel <small class="unit-label">(mm)</small></h2>
+              <label>Fixing
+                <select id="in-back-type">
+                  <option value="groove">Groove / dado</option>
+                  <option value="rabbet">Rabbet / rebate</option>
+                  <option value="overlay">Full overlay</option>
+                </select>
+              </label>
+              <label>Back thickness <input id="in-back-thk" type="number" min="1" step="1" /></label>
+              <label id="lbl-back-groove">Groove / rebate depth <input id="in-back-groove" type="number" min="0" step="1" /></label>
+              <label id="lbl-back-setback">Setback from rear <input id="in-back-setback" type="number" min="0" step="1" /></label>
+              <p class="hint">Overlay = full panel on the rear. Groove/rabbet = inset panel housed in the carcass; depth = how far it sits into the groove, setback = how far it's recessed from the back.</p>
+            </section>
+
+            <section class="card">
+              <h2>Sheet stock</h2>
+              <label>Sheet width  <input id="in-sw" type="number" min="1" step="1" /></label>
+              <label>Sheet height <input id="in-sh" type="number" min="1" step="1" /></label>
+              <label>Saw kerf <input id="in-kerf" type="number" min="0" step="0.1" /></label>
+              <label class="checkbox"><input id="in-grain" type="checkbox" /> Lock grain (no rotation)</label>
+              <p class="hint">Defines the panel size and blade width used to nest parts in the Sheet layout tab.</p>
+            </section>
+
+            <section class="card">
+              <h2>Edge banding <small>L=length · W=width edges</small></h2>
+              <div id="band-grid" class="band-grid"></div>
+            </section>
+          </div>
+        </div>
+
+        <!-- Floating glass panel for the selected part (overlays the canvas) -->
+        <div class="sel-overlay hidden" id="card-selected">
+          <div class="sel-head">
+            <h2 id="sel-title">Selected component</h2>
+            <button id="sel-close" type="button" class="sel-close" aria-label="Clear selection" title="Clear selection">✕</button>
+          </div>
+          <div id="sel-fields"></div>
+          <p id="sel-derived" class="hint"></p>
+          <div class="btn-row" id="sel-actions">
+            <button id="sel-update" type="button">Update</button>
+            <button id="sel-delete" type="button" class="ghost">Delete</button>
+          </div>
+        </div>
+      </div>
+      <div id="sheet-stats" class="stats hidden"></div>
+    </section>
+
+    <!-- RIGHT: CUTLIST -->
+    <aside class="panel right">
+      <section class="card grow">
+        <div class="cut-head">
+          <h2>Cut list</h2>
+          <div class="cut-scope" id="cut-scope" role="group" aria-label="Cut list scope">
+            <button id="scope-module" class="active" type="button" title="This module only">Module</button>
+            <button id="scope-job" type="button" title="Whole job — all modules combined">Job</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="cutlist">
+            <thead>
+              <tr><th>Part</th><th>Qty</th><th>Length</th><th>Width</th><th>Edges</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div id="cutlist-summary" class="summary"></div>
+        <div class="btn-row">
+          <button id="btn-export" type="button">Export CSV</button>
+          <button id="btn-pdf" type="button">Export PDF</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
