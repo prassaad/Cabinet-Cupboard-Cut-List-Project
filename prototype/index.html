@@ -57,6 +57,8 @@
 
     <!-- CENTER: CANVAS TABS -->
     <section class="center">
+      <!-- Job ▸ Module switcher: each chip is one cabinet/module in this job -->
+      <div class="module-bar" id="module-bar"></div>
       <div class="tabs">
         <button class="tab active" data-tab="design" type="button">Design</button>
         <button class="tab" data-tab="sheet" type="button">Sheet layout</button>
@@ -164,7 +166,13 @@
     <!-- RIGHT: CUTLIST -->
     <aside class="panel right">
       <section class="card grow">
-        <h2>Cut list</h2>
+        <div class="cut-head">
+          <h2>Cut list</h2>
+          <div class="cut-scope" id="cut-scope" role="group" aria-label="Cut list scope">
+            <button id="scope-module" class="active" type="button" title="This module only">Module</button>
+            <button id="scope-job" type="button" title="Whole job — all modules combined">Job</button>
+          </div>
+        </div>
         <div class="table-wrap">
           <table id="cutlist">
             <thead>

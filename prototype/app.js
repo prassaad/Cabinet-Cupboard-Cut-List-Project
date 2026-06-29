@@ -44,6 +44,18 @@ const DEFAULTS = () => ({
 });
 
 let S = DEFAULTS();
+S.name = 'Module 1';
+
+// ---------- Job ▸ Module wrapper (ARCH-001, phase 1) ----------
+// A Job owns many Modules; each Module is a full S-shaped design state. The editor always
+// operates on the active module through the global `S`, so single-module behaviour is identical
+// to before — the wrapper only adds module switching, add/delete and job-level persistence.
+// (Per-module settings like unit/sheet are kept on the module for now; splitting job-wide
+//  settings + the job-rollup cut list are the next ARCH-001 sub-phases.)
+let JOB = { name: 'Job 1', modules: [S], active: 0, _mseq: 1 };
+let cutScope = 'module';   // 'module' (active module only) | 'job' (all modules rolled up) — ARCH-001 phase 2
+const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
 const MM_PER_IN = 25.4;
 
 // ---------- Refs ----------
@@ -233,6 +245,42 @@ function cutList() {
   }
   return [...map.values()];
 }
+
+// ---------- Job-wide rollup (ARCH-001 phase 2) ----------
+// Reuse every per-module geometry function by temporarily pointing the global S at each module.
+function withModule(m, fn) { const prev = S; S = m; try { return fn(); } finally { S = prev; } }
+const isJobScope = () => cutScope === 'job';
+// All cut-list instances across every module (each tagged with its source module index/name).
+function jobCutListInstances() {
+  const out = [];
+  JOB.modules.forEach((m, mi) => withModule(m, () => {
+    for (const it of cutListInstances()) out.push({ ...it, mi, mname: m.name || `Module ${mi + 1}` });
+  }));
+  return out;
+}
+// Consolidated job cut list: identical parts merged across modules, banding from the first contributor.
+function jobCutList() {
+  const map = new Map();
+  JOB.modules.forEach((m, mi) => withModule(m, () => {
+    for (const it of cutListInstances()) {
+      const k = groupKey(it);
+      if (map.has(k)) map.get(k).qty++;
+      else map.set(k, { ...it, qty: 1, band: bandNotation(it.key) });
+    }
+  }));
+  return [...map.values()];
+}
+// Totals summed with each module's own banding (tape) and geometry (area) — correct even when modules band differently.
+function jobTotals() {
+  let tapeMM = 0, areaMM2 = 0, partCount = 0;
+  JOB.modules.forEach((m) => withModule(m, () => {
+    for (const it of cutListInstances()) { tapeMM += bandLen(it.key, it.length, it.width); areaMM2 += it.length * it.width; partCount++; }
+  }));
+  return { tapeMM, areaMM2, partCount };
+}
+// One nesting pass over every module's parts → fewer sheets than nesting each module alone.
+// Uses the active module's sheet spec + grain lock as the job sheet (settings are still per-module).
+function jobNest() { return nest(jobCutListInstances()); }
 // Cut-list instances produced by the currently selected component or carcass face.
 function instancesForSelection() {
   const id = S.selectedId; if (id == null) return [];
@@ -254,20 +302,24 @@ function instancesForSelection() {
 const selectedGroupKeys = () => new Set(instancesForSelection().map(groupKey));
 
 function renderCutList() {
-  const parts = cutList();
+  const job = isJobScope();
+  const parts = job ? jobCutList() : cutList();
   const selKeys = selectedGroupKeys();
   const tbody = document.querySelector('#cutlist tbody');
-  tbody.innerHTML = parts.map(p =>
-    `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${bandNotation(p.key)}</td></tr>`
-  ).join('');
+  tbody.innerHTML = parts.map(p => {
+    const bn = job ? (p.band || '—') : bandNotation(p.key);
+    return `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${bn}</td></tr>`;
+  }).join('');
   const ths = document.querySelectorAll('#cutlist thead th');
   ths[2].textContent = `Length (${S.unit})`; ths[3].textContent = `Width (${S.unit})`;
 
-  const totalParts = parts.reduce((n, p) => n + p.qty, 0);
-  const areaMM2 = parts.reduce((a, p) => a + p.qty * p.length * p.width, 0);
-  const tapeMM = parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0);
-  const pack = nest(cutListInstances());
+  const totals = job ? jobTotals() : null;
+  const totalParts = job ? totals.partCount : parts.reduce((n, p) => n + p.qty, 0);
+  const areaMM2 = job ? totals.areaMM2 : parts.reduce((a, p) => a + p.qty * p.length * p.width, 0);
+  const tapeMM = job ? totals.tapeMM : parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0);
+  const pack = job ? jobNest() : nest(cutListInstances());
   $('cutlist-summary').innerHTML =
+    (job ? `Scope: <b>whole job</b> · ${JOB.modules.length} module(s)<br>` : '') +
     `Parts: <b>${totalParts}</b><br>Board area: <b>${(areaMM2 / 1e6).toFixed(3)} m²</b><br>` +
     `Edge tape: <b>${(tapeMM / 1000).toFixed(2)} m</b><br>` +
     `Sheets needed: <b>${pack.sheets.length}</b> · Utilisation: <b>${(Math.min(1, pack.utilisation) * 100).toFixed(1)}%</b>`;
@@ -685,6 +737,7 @@ function render() {
   const sheetActive = sheetCanvas.classList.contains('active');
   $('sheet-stats').classList.toggle('hidden', !sheetActive);
   if (sheetActive) $('sheet-stats').innerHTML =
+    `${isJobScope() ? `<b>Job</b> (${JOB.modules.length} modules) · ` : ''}` +
     `<b>${pack.sheets.length}</b> sheet(s) of ${fmt(S.sheet.w)}×${fmt(S.sheet.h)} ${S.unit} · kerf ${fmtU(S.sheet.kerf)} · ` +
     `utilisation <b>${(Math.min(1, pack.utilisation) * 100).toFixed(1)}%</b> · grain <b>${S.grainLock ? 'locked' : 'free'}</b>`;
 }
@@ -1031,32 +1084,100 @@ $('zoom-in').addEventListener('click', () => zoomStep(1.2));
 $('zoom-out').addEventListener('click', () => zoomStep(1 / 1.2));
 $('zoom-fit').addEventListener('click', () => { S.zoom = 1; S.pan = { x: 0, y: 0 }; S.zoom3d = 1; render(); });
 
+// ---------- Modules (Job ▸ Module switcher) ----------
+// The active module is always the global `S`; mutations land in JOB.modules[active] because
+// it is the same object reference. We only re-sync the slot when `S` is reassigned (switch/load/reset).
+function renderModuleBar() {
+  const bar = $('module-bar'); if (!bar) return;
+  const chips = JOB.modules.map((m, i) => {
+    const active = i === JOB.active, name = escapeHtml(m.name || `Module ${i + 1}`);
+    const x = (active && JOB.modules.length > 1) ? ` <span class="mod-x" data-del="${i}" title="Delete module">✕</span>` : '';
+    return `<button class="mod-chip${active ? ' active' : ''}" data-mi="${i}" type="button" title="Click to switch · double-click to rename">${name}${x}</button>`;
+  }).join('');
+  bar.innerHTML = `<span class="mod-label">Modules</span>${chips}<button id="mod-add" class="mod-add" type="button" title="Add a module to this job">+ Module</button>`;
+}
+function switchTo(i) {
+  if (i < 0 || i >= JOB.modules.length) return;
+  JOB.modules[JOB.active] = S;                 // commit current (already a live reference)
+  if (i === JOB.active) { renderModuleBar(); return; }
+  JOB.active = i; S = JOB.modules[i];
+  if (cellMode) setCellMode(false);
+  S.selectedId = null; normalizeComps(); renderModuleBar(); syncInputs(); render();
+}
+function addModule() {
+  JOB.modules[JOB.active] = S;
+  const m = DEFAULTS(); JOB._mseq = (JOB._mseq || JOB.modules.length) + 1; m.name = `Module ${JOB._mseq}`;
+  JOB.modules.push(m); switchTo(JOB.modules.length - 1);
+}
+function deleteModule(i) {
+  if (JOB.modules.length <= 1 || i < 0 || i >= JOB.modules.length) return;
+  if (!confirm(`Delete "${JOB.modules[i].name || `Module ${i + 1}`}"? This cannot be undone.`)) return;
+  JOB.modules.splice(i, 1);
+  JOB.active = (i < JOB.active) ? JOB.active - 1 : Math.min(JOB.active, JOB.modules.length - 1);
+  S = JOB.modules[JOB.active];
+  if (cellMode) setCellMode(false);
+  S.selectedId = null; normalizeComps(); renderModuleBar(); syncInputs(); render();
+}
+function renameModule(i) {
+  if (i < 0 || i >= JOB.modules.length) return;
+  const cur = JOB.modules[i].name || `Module ${i + 1}`;
+  let name = null;
+  try { name = prompt('Module name', cur); } catch { return; }   // prompt() is unavailable in some shells (e.g. Electron)
+  if (name == null) return;
+  JOB.modules[i].name = name.trim() || cur; renderModuleBar();
+}
+
 // ---------- Persistence ----------
-const STORE_KEY = 'cabinet-cutlist-prototype';
-function save() { localStorage.setItem(STORE_KEY, JSON.stringify(S)); flash($('btn-save'), 'Saved'); }
+const STORE_KEY = 'cabinet-cutlist-prototype';   // legacy single-module save (read once for migration)
+const JOB_KEY = 'cabinet-cutlist-job';           // current job (multi-module) save
+function hydrateModule(raw) {
+  const m = Object.assign(DEFAULTS(), raw);
+  for (const c of m.comps) if (c.type === 'divider') c.type = 'vertical';   // migrate old terminology
+  if (m.band && m.band.Divider) { m.band.Vertical = m.band.Divider; delete m.band.Divider; }
+  m.band = Object.assign(defaultBand(), m.band || {});
+  return m;
+}
+function applyJob(job) {
+  const mods = (job.modules && job.modules.length ? job.modules : [DEFAULTS()]).map(hydrateModule);
+  mods.forEach((m, i) => { if (!m.name) m.name = `Module ${i + 1}`; });
+  JOB = { name: job.name || 'Job 1', modules: mods, active: 0, _mseq: Math.max(job._mseq || 0, mods.length) };
+  JOB.active = Math.min(Math.max(0, job.active | 0), mods.length - 1);
+  for (const m of mods) { S = m; normalizeComps(); }   // normalizeComps reads the global S
+  S = JOB.modules[JOB.active];
+  if (cellMode) setCellMode(false);
+  renderModuleBar(); syncInputs(); render();
+}
+function save() { JOB.modules[JOB.active] = S; localStorage.setItem(JOB_KEY, JSON.stringify(JOB)); flash($('btn-save'), 'Saved'); }
 function load() {
-  const raw = localStorage.getItem(STORE_KEY); if (!raw) { flash($('btn-load'), 'Nothing saved'); return; }
+  const rawJob = localStorage.getItem(JOB_KEY), rawLegacy = localStorage.getItem(STORE_KEY);
+  if (!rawJob && !rawLegacy) { flash($('btn-load'), 'Nothing saved'); return; }
   try {
-    S = Object.assign(DEFAULTS(), JSON.parse(raw));
-    for (const c of S.comps) if (c.type === 'divider') c.type = 'vertical';   // migrate old terminology
-    if (S.band && S.band.Divider) { S.band.Vertical = S.band.Divider; delete S.band.Divider; }
-    S.band = Object.assign(defaultBand(), S.band || {}); normalizeComps(); syncInputs(); render(); flash($('btn-load'), 'Loaded');
+    const job = rawJob ? JSON.parse(rawJob) : { name: 'Job 1', modules: [JSON.parse(rawLegacy)], active: 0 };
+    applyJob(job); flash($('btn-load'), 'Loaded');
   }
   catch { flash($('btn-load'), 'Load failed'); }
 }
-function reset() { S = DEFAULTS(); syncInputs(); render(); }
+function reset() {
+  S = DEFAULTS(); S.name = 'Module 1';
+  JOB = { name: 'Job 1', modules: [S], active: 0, _mseq: 1 };
+  if (cellMode) setCellMode(false);
+  renderModuleBar(); syncInputs(); render();
+}
 function flash(btn, msg) { const old = btn.textContent; btn.textContent = msg; setTimeout(() => { btn.textContent = old; }, 1100); }
 
 // ---------- Export ----------
 function exportCSV() {
-  const parts = cutList();
+  const job = isJobScope();
+  const parts = job ? jobCutList() : cutList();
   const rows = [['Part', 'Qty', `Length (${S.unit})`, `Width (${S.unit})`, 'Banded edges']];
-  parts.forEach(p => rows.push([p.name, p.qty, fmt(p.length), fmt(p.width), `"${bandNotation(p.key)}"`]));
+  parts.forEach(p => rows.push([p.name, p.qty, fmt(p.length), fmt(p.width), `"${job ? (p.band || '—') : bandNotation(p.key)}"`]));
   const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cutlist.csv'; a.click(); URL.revokeObjectURL(a.href);
 }
 function exportPDF() {
-  const pack = nest(cutListInstances()), parts = cutList();
+  const job = isJobScope();
+  const pack = job ? jobNest() : nest(cutListInstances());
+  const parts = job ? jobCutList() : cutList();
   const scale = 680 / Math.max(pack.SW, pack.SH);
   const imgs = pack.sheets.map((sheet, i) => {
     const c = document.createElement('canvas'); c.width = Math.round(pack.SW * scale); c.height = Math.round(pack.SH * scale);
@@ -1064,8 +1185,11 @@ function exportPDF() {
     sheet.placements.forEach(p => drawPlacement(x, p, 0, 0, scale, true, { sheetNo: i + 1 }));
     return `<figure><img src="${c.toDataURL('image/png')}"/><figcaption>Sheet ${i + 1} — ${fmt(pack.SW)}×${fmt(pack.SH)} ${S.unit}</figcaption></figure>`;
   }).join('');
-  const tape = parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0) / 1000;
-  const rows = parts.map(p => `<tr><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${bandNotation(p.key)}</td></tr>`).join('');
+  const tape = (job ? jobTotals().tapeMM : parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0)) / 1000;
+  const rows = parts.map(p => `<tr><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${job ? (p.band || '—') : bandNotation(p.key)}</td></tr>`).join('');
+  const heading = job
+    ? `Job ${escapeHtml(JOB.name || 'Job 1')} · ${JOB.modules.length} module(s) · grain ${S.grainLock ? 'locked' : 'free'} · edge tape ${tape.toFixed(2)} m`
+    : `Cabinet ${fmt(S.cab.w)}×${fmt(S.cab.h)}×${fmt(S.cab.d)} ${S.unit} · material ${fmtU(S.cab.t)} · doors ${doorRects().length} · grain ${S.grainLock ? 'locked' : 'free'} · edge tape ${tape.toFixed(2)} m`;
   const win = window.open('', '_blank');
   win.document.write(`<!DOCTYPE html><html><head><title>Cut list</title><style>
     body{font:13px system-ui,sans-serif;color:#111;margin:24px}h1{font-size:18px}h2{font-size:14px;margin-top:24px}
@@ -1073,7 +1197,7 @@ function exportPDF() {
     figure{margin:0 0 18px;page-break-inside:avoid}img{max-width:100%;border:1px solid #ccc}figcaption{color:#555;font-size:12px;margin-top:4px}@media print{button{display:none}}
   </style></head><body>
     <h1>Cabinet &amp; Cupboard — Cut List</h1>
-    <p>Cabinet ${fmt(S.cab.w)}×${fmt(S.cab.h)}×${fmt(S.cab.d)} ${S.unit} · material ${fmtU(S.cab.t)} · doors ${doorRects().length} · grain ${S.grainLock ? 'locked' : 'free'} · edge tape ${tape.toFixed(2)} m</p>
+    <p>${heading}</p>
     <table><thead><tr><th>Part</th><th>Qty</th><th>Length (${S.unit})</th><th>Width (${S.unit})</th><th>Edges</th></tr></thead><tbody>${rows}</tbody></table>
     <h2>Sheet layout — ${pack.sheets.length} sheet(s), utilisation ${(Math.min(1, pack.utilisation) * 100).toFixed(1)}%</h2>${imgs}
     <button onclick="window.print()">Print / Save as PDF</button></body></html>`);
@@ -1208,14 +1332,29 @@ function aiGetCutList() {
     },
   };
 }
+// Job-wide cut list rollup (all modules) for the AI copilot.
+function aiGetJobCutList() {
+  const parts = jobCutList(), pack = jobNest(), totals = jobTotals();
+  return {
+    modules: JOB.modules.map((m, i) => ({ index: i, name: m.name || `Module ${i + 1}` })),
+    parts: parts.map(p => ({ name: p.name, qty: p.qty, length: Math.round(p.length), width: Math.round(p.width), edges: p.band })),
+    totals: {
+      partCount: totals.partCount,
+      boardAreaM2: +(totals.areaMM2 / 1e6).toFixed(3), edgeTapeM: +(totals.tapeMM / 1000).toFixed(2),
+      sheetsNeeded: pack.sheets.length, utilisationPct: +(Math.min(1, pack.utilisation) * 100).toFixed(1),
+    },
+  };
+}
 // Priced bill of materials with inferred hardware. Prices overridable; defaults in GBP.
+// opts.scope === 'job' rolls up every module; otherwise the active module only.
 function aiEstimateBOM(opts = {}) {
+  const job = opts.scope === 'job';
   const p = Object.assign({ sheet: 45, tapePerM: 0.8, hinge: 1.2, handle: 3, shelfPin: 0.1, screwsPerCabinet: 1.5 }, opts.prices || {});
-  const parts = cutList(), instances = cutListInstances(), pack = nest(instances);
+  const parts = job ? jobCutList() : cutList(), instances = job ? jobCutListInstances() : cutListInstances(), pack = job ? jobNest() : nest(instances);
   const sheets = pack.sheets.length;
-  const tapeM = parts.reduce((a, q) => a + q.qty * bandLen(q.key, q.length, q.width), 0) / 1000;
+  const tapeM = (job ? jobTotals().tapeMM : parts.reduce((a, q) => a + q.qty * bandLen(q.key, q.length, q.width), 0)) / 1000;
   const shelfCount = instances.filter(i => i.name === 'Shelf').length;
-  const leaves = doorRects(), doorCount = leaves.length;
+  const leaves = job ? JOB.modules.flatMap(m => withModule(m, () => doorRects())) : doorRects(), doorCount = leaves.length;
   const hingeFor = (dh) => dh <= 900 ? 2 : dh <= 1500 ? 3 : dh <= 2000 ? 4 : 5;
   const hingesTotal = leaves.reduce((a, r) => a + hingeFor(r.y1 - r.y0), 0);
   const hingesPerDoor = doorCount ? Math.round(hingesTotal / doorCount) : 0;
@@ -1225,7 +1364,7 @@ function aiEstimateBOM(opts = {}) {
     { item: `Hinges (~${hingesPerDoor}/door)`, qty: hingesTotal, unit: 'ea', unitCost: p.hinge },
     { item: 'Handles', qty: doorCount, unit: 'ea', unitCost: p.handle },
     { item: 'Shelf pins', qty: shelfCount * 4, unit: 'ea', unitCost: p.shelfPin },
-    { item: 'Screws / fixings', qty: 1, unit: 'cabinet', unitCost: p.screwsPerCabinet },
+    { item: 'Screws / fixings', qty: job ? JOB.modules.length : 1, unit: 'cabinet', unitCost: p.screwsPerCabinet },
   ].filter(l => l.qty > 0).map(l => ({ ...l, lineCost: +(l.qty * l.unitCost).toFixed(2) }));
   return {
     currency: opts.currency || 'GBP', lines,
@@ -1234,11 +1373,34 @@ function aiEstimateBOM(opts = {}) {
   };
 }
 window.Cabinet = {
-  getState: aiGetState, getCutList: aiGetCutList, estimateBOM: aiEstimateBOM,
+  getState: aiGetState, getCutList: aiGetCutList, getJobCutList: aiGetJobCutList, estimateBOM: aiEstimateBOM,
   setDimensions: aiSetDimensions, applyPreset: aiApplyPreset, setDoors: aiSetDoors,
   addShelves: aiAddShelves, addVerticals: aiAddVerticals, clearComponents: aiClearComponents,
   setSheet: aiSetSheet, setGrainLock: aiSetGrainLock, setBanding: aiSetBanding,
 };
 
+// Module bar: switch / add / delete / rename
+$('module-bar').addEventListener('click', (e) => {
+  const del = e.target.closest('.mod-x');
+  if (del) { e.stopPropagation(); deleteModule(parseInt(del.dataset.del, 10)); return; }
+  if (e.target.closest('#mod-add')) { addModule(); return; }
+  const chip = e.target.closest('.mod-chip');
+  if (chip) switchTo(parseInt(chip.dataset.mi, 10));
+});
+$('module-bar').addEventListener('dblclick', (e) => {
+  const chip = e.target.closest('.mod-chip'); if (!chip) return;
+  renameModule(parseInt(chip.dataset.mi, 10));
+});
+
+// Cut-list / sheet scope: this module vs the whole job
+function setCutScope(s) {
+  cutScope = (s === 'job') ? 'job' : 'module';
+  $('scope-module').classList.toggle('active', cutScope === 'module');
+  $('scope-job').classList.toggle('active', cutScope === 'job');
+  render();
+}
+$('scope-module').addEventListener('click', () => setCutScope('module'));
+$('scope-job').addEventListener('click', () => setCutScope('job'));
+
 // ---------- Boot ----------
-buildBandGrid(); syncInputs(); render();
+buildBandGrid(); renderModuleBar(); syncInputs(); render();

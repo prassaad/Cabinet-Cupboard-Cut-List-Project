@@ -2,9 +2,9 @@
 title: "ARCH-001 — Job ▸ Module ▸ Component Architecture (room-level design)"
 phase: 06_architecture
 created: 2026-06-25
-updated: 2026-06-25
-version: 1.0
-status: PLAN — approved to document; implementation NOT started (client: "just the plan, not yet building")
+updated: 2026-06-29
+version: 1.2
+status: PHASES 1–2 IMPLEMENTED — Job▸Module wrapper + switcher (P1) and job-wide cut list / cross-module sheet nesting / BOM rollup (P2) live in prototype/ (single-module behaviour unchanged). Phases 3–5 not started.
 related:
   - phase 1-2 02-elicitation/session-notes/NOTES-002_Client-Review_2026-06-25.md
   - prototype/app.js
@@ -162,6 +162,22 @@ Module {                       // ~= today's S.cab + parts
 ---
 
 ## Version history
+- **v1.2 (2026-06-29)** — **Phase 2 implemented** in `prototype/` (the headline ROI: fewer sheets). Added a
+  **Module ⇄ Job scope toggle** on the cut-list panel that governs the cut list, summary, Sheet-layout tab,
+  CSV/PDF export and AI BOM. In Job scope: a **consolidated job cut list**, **totals summed per-module** (so
+  tape is correct even when modules band differently), and a **single cross-module nesting pass** (`jobNest`)
+  → one optimised sheet set for the whole job. Implementation reuses every per-module geometry function via
+  `withModule(m, fn)` (temporarily points global `S` at each module), so no logic was duplicated and module
+  scope (default) is unchanged. AI gained `Cabinet.getJobCutList()` and `estimateBOM({scope:'job'})`. Known
+  follow-ups: per-module **subtotal rows** in the job table (currently consolidated), and **colour/label sheet
+  pieces by source module** (nest rects don't yet carry module id).
+- **v1.1 (2026-06-29)** — **Phase 1 implemented** in `prototype/` (app.js/index.html/styles.css). The global
+  `S` is now the active module inside a `JOB = { name, modules:[S-shaped], active, _mseq }` wrapper; the editor
+  still operates on `S`, so **single-module behaviour is byte-for-byte unchanged**. Added a **module switcher**
+  bar (switch / + Module / delete / double-click rename) and **job-level persistence** (`cabinet-cutlist-job`)
+  with backward-compatible migration of legacy single-cabinet saves (`cabinet-cutlist-prototype`). Per-module
+  settings (unit/sheet) kept on the module for now. Next: Phase 1 step 2 (split job-wide settings) and Phase 2
+  (job-rollup cut list / cross-module nesting).
 - **v1.0 (2026-06-25)** — Initial architecture plan from benchmark research + current prototype analysis. Hierarchy
   confirmed (Job ▸ Module ▸ Component); recommended run-based linked view first; data-model split (Job settings vs
   Module) and 5-phase roadmap defined. Implementation deferred ("just the plan").
