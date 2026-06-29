@@ -10,6 +10,12 @@
   <header class="topbar">
     <h1>Cabinet &amp; Cupboard Cut List <span class="tag">prototype</span></h1>
     <div class="top-actions">
+      <button id="ai-fab" type="button" title="Design Copilot" aria-label="Open Design Copilot">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 13.5A1.5 1.5 0 0 1 18.5 15H9l-4 3v-3H4.5A1.5 1.5 0 0 1 3 13.5v-7A1.5 1.5 0 0 1 4.5 5h10" />
+          <path d="M19 3l.8 1.7 1.7.8-1.7.8L19 8l-.8-1.7L16.5 5.5l1.7-.8z" />
+        </svg>
+      </button>
       <button id="btn-save" type="button">Save</button>
       <button id="btn-load" type="button">Load</button>
       <button id="btn-reset" type="button" class="ghost">Reset</button>
@@ -59,6 +65,14 @@
     <section class="center">
       <!-- Job ▸ Module switcher: each chip is one cabinet/module in this job -->
       <div class="module-bar" id="module-bar"></div>
+      <!-- Small panel shown when adding a module: capture code + name (only name is shown in the list) -->
+      <div class="module-add-panel hidden" id="module-add-panel">
+        <span class="map-title">New module</span>
+        <label class="map-field">Code <input id="mod-code" type="text" maxlength="20" placeholder="e.g. C01" /></label>
+        <label class="map-field">Name <input id="mod-name" type="text" maxlength="40" placeholder="Module name" /></label>
+        <button id="mod-add-confirm" type="button">Add</button>
+        <button id="mod-add-cancel" type="button" class="ghost">Cancel</button>
+      </div>
       <div class="tabs">
         <button class="tab active" data-tab="design" type="button">Design</button>
         <button class="tab" data-tab="room" type="button">Room</button>
@@ -92,6 +106,7 @@
         <canvas id="room-canvas" class="view"></canvas>
         <canvas id="sheet-canvas" class="view"></canvas>
         <div id="setup-view" class="view setup-view">
+          <p class="setup-empty">No module selected. Click <b>+ Module</b> above to add one, then configure its sizes, back panel, sheet stock and banding here.</p>
           <p class="setup-intro">One-time project setup. These settings rarely change while you're designing — set them once and they apply everywhere.</p>
           <div class="setup-grid">
             <section class="card">
@@ -193,7 +208,6 @@
   </main>
 
   <!-- AI DESIGN COPILOT -->
-  <button id="ai-fab" type="button" title="Design Copilot" aria-label="Open Design Copilot">✦ Assistant</button>
   <section id="ai-panel" class="ai-panel hidden" aria-label="Design Copilot">
     <header class="ai-head">
       <span class="ai-title">✦ Design Copilot</span>

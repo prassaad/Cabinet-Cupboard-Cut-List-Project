@@ -44,15 +44,13 @@ const DEFAULTS = () => ({
 });
 
 let S = DEFAULTS();
-S.name = 'Module 1';
+S.name = '';   // dummy working state; no module is active until the user adds one
 
 // ---------- Job ▸ Module wrapper (ARCH-001, phase 1) ----------
 // A Job owns many Modules; each Module is a full S-shaped design state. The editor always
-// operates on the active module through the global `S`, so single-module behaviour is identical
-// to before — the wrapper only adds module switching, add/delete and job-level persistence.
-// (Per-module settings like unit/sheet are kept on the module for now; splitting job-wide
-//  settings + the job-rollup cut list are the next ARCH-001 sub-phases.)
-let JOB = { name: 'Job 1', modules: [S], active: 0, _mseq: 1 };
+// operates on the active module through the global `S`. A job starts with no modules (active = -1)
+// and stays that way until one is added — keeping the initial load light and the empty state clean.
+let JOB = { name: 'Job 1', modules: [], active: -1, _mseq: 0 };
 let cutScope = 'module';   // 'module' (active module only) | 'job' (all modules rolled up) — ARCH-001 phase 2
 const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -814,7 +812,28 @@ window.addEventListener('mouseup', () => {
 roomCanvas.addEventListener('wheel', (e) => { e.preventDefault(); const f = e.deltaY < 0 ? 1.12 : 1 / 1.12; roomView.zoom = Math.max(0.3, Math.min(6, roomView.zoom * f)); renderRoom(); }, { passive: false });
 
 // ---------- Master render ----------
+// Empty job (all modules deleted): clear everything and prompt to add one.
+function renderEmptyJob() {
+  document.body.classList.add('no-modules');
+  renderModuleBar();
+  lastRoomRects = [];
+  document.querySelector('#cutlist tbody').innerHTML = '';
+  $('cutlist-summary').innerHTML = 'No modules in this job. Click <b>+ Module</b> to add one.';
+  $('card-selected').classList.add('hidden');
+  btnDelete.disabled = true;
+  ['view-toggle', 'zoom-ctl', 'explode-wrap', 'dims-wrap', 'sheet-stats'].forEach(id => $(id).classList.add('hidden'));
+  const drawMsg = (canvas, ctx) => {
+    const { cw, ch } = fitCanvas(canvas, ctx); ctx.clearRect(0, 0, cw, ch);
+    ctx.fillStyle = '#9aa3b2'; ctx.font = '15px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText('No modules — click “+ Module” to add one', cw / 2, ch / 2); ctx.textAlign = 'left';
+  };
+  if (designCanvas.classList.contains('active')) drawMsg(designCanvas, dctx);
+  if (roomCanvas.classList.contains('active')) drawMsg(roomCanvas, rctx);
+  if (sheetCanvas.classList.contains('active')) drawMsg(sheetCanvas, sctx);
+}
 function render() {
+  if (!JOB.modules.length) { renderEmptyJob(); return; }
+  document.body.classList.remove('no-modules');
   const pack = renderCutList();
   const designActive = designCanvas.classList.contains('active');
   if (designActive) (S.viewMode === '3d' ? renderDesign3D : renderDesign)();
@@ -884,6 +903,7 @@ function readInputs() {
 
 // ---------- Component actions ----------
 function addComp(type) {
+  if (!JOB.modules.length) return;
   const { w, h, t } = S.cab;
   const p = S.lastPoint || { x: w / 2, y: h / 2 };
   if (type === 'drawer') {
@@ -1184,30 +1204,48 @@ function renderModuleBar() {
   const bar = $('module-bar'); if (!bar) return;
   const chips = JOB.modules.map((m, i) => {
     const active = i === JOB.active, name = escapeHtml(m.name || `Module ${i + 1}`);
-    const x = (active && JOB.modules.length > 1) ? ` <span class="mod-x" data-del="${i}" title="Delete module">✕</span>` : '';
-    return `<button class="mod-chip${active ? ' active' : ''}" data-mi="${i}" type="button" title="Click to switch · double-click to rename">${name}${x}</button>`;
+    const x = active ? ` <span class="mod-x" data-del="${i}" title="Delete module">✕</span>` : '';
+    const tip = `${m.code ? `Code ${escapeHtml(m.code)} · ` : ''}Click to switch · double-click to rename`;
+    return `<button class="mod-chip${active ? ' active' : ''}" data-mi="${i}" type="button" title="${tip}">${name}${x}</button>`;
   }).join('');
-  bar.innerHTML = `<span class="mod-label">Modules</span>${chips}<button id="mod-add" class="mod-add" type="button" title="Add a module to this job">+ Module</button>`;
+  const label = JOB.modules.length ? 'Modules' : 'No modules';
+  bar.innerHTML = `<span class="mod-label">${label}</span>${chips}<button id="mod-add" class="mod-add" type="button" title="Add a module to this job">+ Module</button>`;
 }
 function switchTo(i) {
   if (i < 0 || i >= JOB.modules.length) return;
-  JOB.modules[JOB.active] = S;                 // commit current (already a live reference)
+  if (JOB.active >= 0 && JOB.modules[JOB.active]) JOB.modules[JOB.active] = S;   // commit current (skip when coming from empty)
   if (i === JOB.active) { renderModuleBar(); return; }
   JOB.active = i; S = JOB.modules[i];
   if (cellMode) setCellMode(false);
   S.selectedId = null; normalizeComps(); renderModuleBar(); syncInputs(); render();
 }
-function addModule() {
-  JOB.modules[JOB.active] = S;
-  const m = DEFAULTS(); JOB._mseq = (JOB._mseq || JOB.modules.length) + 1; m.name = `Module ${JOB._mseq}`;
+function addModule(name, code) {
+  if (JOB.active >= 0 && JOB.modules[JOB.active]) JOB.modules[JOB.active] = S;
+  const m = DEFAULTS(); JOB._mseq = (JOB._mseq || JOB.modules.length) + 1;
+  m.name = (name && name.trim()) || `Module ${JOB._mseq}`;
+  if (code && code.trim()) m.code = code.trim();
   JOB.modules.push(m); switchTo(JOB.modules.length - 1);
 }
+// Small panel to name a module on creation (code stored, name shown in the list).
+function openAddModulePanel() {
+  const panel = $('module-add-panel'); if (!panel) return;
+  const next = (JOB._mseq || JOB.modules.length) + 1;
+  $('mod-code').value = ''; $('mod-name').value = `Module ${next}`;
+  panel.classList.remove('hidden');
+  $('mod-name').focus(); $('mod-name').select();
+}
+function closeAddModulePanel() { const p = $('module-add-panel'); if (p) p.classList.add('hidden'); }
+function confirmAddModule() { addModule($('mod-name').value, $('mod-code').value); closeAddModulePanel(); }
 function deleteModule(i) {
-  if (JOB.modules.length <= 1 || i < 0 || i >= JOB.modules.length) return;
+  if (i < 0 || i >= JOB.modules.length) return;
   if (!confirm(`Delete "${JOB.modules[i].name || `Module ${i + 1}`}"? This cannot be undone.`)) return;
   JOB.modules.splice(i, 1);
-  JOB.active = (i < JOB.active) ? JOB.active - 1 : Math.min(JOB.active, JOB.modules.length - 1);
-  S = JOB.modules[JOB.active];
+  if (JOB.modules.length === 0) {
+    JOB.active = -1; S = DEFAULTS(); S.name = '';   // empty job: dummy S so helpers never touch null
+  } else {
+    JOB.active = (i < JOB.active) ? JOB.active - 1 : Math.min(JOB.active, JOB.modules.length - 1);
+    S = JOB.modules[JOB.active];
+  }
   if (cellMode) setCellMode(false);
   S.selectedId = null; normalizeComps(); renderModuleBar(); syncInputs(); render();
 }
@@ -1231,16 +1269,20 @@ function hydrateModule(raw) {
   return m;
 }
 function applyJob(job) {
-  const mods = (job.modules && job.modules.length ? job.modules : [DEFAULTS()]).map(hydrateModule);
+  const mods = (job.modules || []).map(hydrateModule);
   mods.forEach((m, i) => { if (!m.name) m.name = `Module ${i + 1}`; });
-  JOB = { name: job.name || 'Job 1', modules: mods, active: 0, _mseq: Math.max(job._mseq || 0, mods.length) };
-  JOB.active = Math.min(Math.max(0, job.active | 0), mods.length - 1);
-  for (const m of mods) { S = m; normalizeComps(); }   // normalizeComps reads the global S
-  S = JOB.modules[JOB.active];
+  JOB = { name: job.name || 'Job 1', modules: mods, active: mods.length ? 0 : -1, _mseq: Math.max(job._mseq || 0, mods.length) };
+  if (mods.length) {
+    JOB.active = Math.min(Math.max(0, job.active | 0), mods.length - 1);
+    for (const m of mods) { S = m; normalizeComps(); }   // normalizeComps reads the global S
+    S = JOB.modules[JOB.active];
+  } else {
+    S = DEFAULTS(); S.name = '';
+  }
   if (cellMode) setCellMode(false);
   renderModuleBar(); syncInputs(); render();
 }
-function save() { JOB.modules[JOB.active] = S; localStorage.setItem(JOB_KEY, JSON.stringify(JOB)); flash($('btn-save'), 'Saved'); }
+function save() { if (JOB.active >= 0 && JOB.modules[JOB.active]) JOB.modules[JOB.active] = S; localStorage.setItem(JOB_KEY, JSON.stringify(JOB)); flash($('btn-save'), 'Saved'); }
 function load() {
   const rawJob = localStorage.getItem(JOB_KEY), rawLegacy = localStorage.getItem(STORE_KEY);
   if (!rawJob && !rawLegacy) { flash($('btn-load'), 'Nothing saved'); return; }
@@ -1251,8 +1293,8 @@ function load() {
   catch { flash($('btn-load'), 'Load failed'); }
 }
 function reset() {
-  S = DEFAULTS(); S.name = 'Module 1';
-  JOB = { name: 'Job 1', modules: [S], active: 0, _mseq: 1 };
+  S = DEFAULTS(); S.name = '';
+  JOB = { name: 'Job 1', modules: [], active: -1, _mseq: 0 };
   if (cellMode) setCellMode(false);
   renderModuleBar(); syncInputs(); render();
 }
@@ -1260,6 +1302,7 @@ function flash(btn, msg) { const old = btn.textContent; btn.textContent = msg; s
 
 // ---------- Export ----------
 function exportCSV() {
+  if (!JOB.modules.length) { flash($('btn-export'), 'No modules'); return; }
   const job = isJobScope();
   const parts = job ? jobCutList() : cutList();
   const rows = [['Part', 'Qty', `Length (${S.unit})`, `Width (${S.unit})`, 'Banded edges']];
@@ -1268,6 +1311,7 @@ function exportCSV() {
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cutlist.csv'; a.click(); URL.revokeObjectURL(a.href);
 }
 function exportPDF() {
+  if (!JOB.modules.length) { flash($('btn-pdf'), 'No modules'); return; }
   const job = isJobScope();
   const pack = job ? jobNest() : nest(cutListInstances());
   const parts = job ? jobCutList() : cutList();
@@ -1476,13 +1520,19 @@ window.Cabinet = {
 $('module-bar').addEventListener('click', (e) => {
   const del = e.target.closest('.mod-x');
   if (del) { e.stopPropagation(); deleteModule(parseInt(del.dataset.del, 10)); return; }
-  if (e.target.closest('#mod-add')) { addModule(); return; }
+  if (e.target.closest('#mod-add')) { openAddModulePanel(); return; }
   const chip = e.target.closest('.mod-chip');
   if (chip) switchTo(parseInt(chip.dataset.mi, 10));
 });
 $('module-bar').addEventListener('dblclick', (e) => {
   const chip = e.target.closest('.mod-chip'); if (!chip) return;
   renameModule(parseInt(chip.dataset.mi, 10));
+});
+$('mod-add-confirm').addEventListener('click', confirmAddModule);
+$('mod-add-cancel').addEventListener('click', closeAddModulePanel);
+$('module-add-panel').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); confirmAddModule(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeAddModulePanel(); }
 });
 
 // Cut-list / sheet scope: this module vs the whole job
@@ -1495,18 +1545,5 @@ function setCutScope(s) {
 $('scope-module').addEventListener('click', () => setCutScope('module'));
 $('scope-job').addEventListener('click', () => setCutScope('job'));
 
-// ---------- Demo seed (opt-in via ?demo) ----------
-// Builds a small 3-cabinet run so the Room/stack view has something to show. Only runs when the
-// URL has ?demo — normal load is unaffected. Nothing is saved unless the user clicks Save.
-function bootDemo() {
-  Cabinet.setDimensions({ width: 600, height: 720, depth: 560 }); Cabinet.addShelves(2);
-  addModule(); Cabinet.setDimensions({ width: 800, height: 720, depth: 320 }); Cabinet.addShelves(1); Cabinet.setDoors(2);
-  addModule(); Cabinet.setDimensions({ width: 500, height: 2100, depth: 580 }); Cabinet.addVerticals(1);
-  ensureRunLayout(); if (JOB.modules[1]) JOB.modules[1].placement.baseHeight = 1500;   // lift module 2 as a wall cabinet
-  switchTo(0);
-  const roomTab = document.querySelector('.tab[data-tab="room"]'); if (roomTab) roomTab.click();
-}
-
 // ---------- Boot ----------
 buildBandGrid(); renderModuleBar(); syncInputs(); render();
-if (/[?&]demo\b/i.test(location.search)) bootDemo();

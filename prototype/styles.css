@@ -95,6 +95,14 @@ select {
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
 
 .card.hidden { display: none; }
+
+/* Empty job (no modules): hide the editing panels — only the module bar + canvas prompt remain */
+.setup-empty { display: none; color: var(--muted); font-size: 13px; max-width: 760px; }
+body.no-modules #card-components,
+body.no-modules .panel.right > .card,
+body.no-modules .setup-intro,
+body.no-modules .setup-grid { display: none; }
+body.no-modules .setup-empty { display: block; }
 #card-selected { border-color: var(--accent); }
 .sel-row span { color: var(--muted); }
 .sel-ro { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--muted); }
@@ -113,6 +121,13 @@ select {
 .mod-chip .mod-x:hover { background: #0003; }
 .mod-add { background: transparent; color: var(--muted); border: 1px dashed var(--line); padding: 5px 10px; border-radius: 6px; }
 .mod-add:hover { color: var(--ink); border-color: var(--accent); }
+
+/* New-module panel (code + name) */
+.module-add-panel { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding: 8px 10px; background: var(--card); border: 1px solid var(--accent); border-radius: 8px; flex-wrap: wrap; }
+.module-add-panel.hidden { display: none; }
+.module-add-panel .map-title { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.module-add-panel .map-field { margin: 0; gap: 6px; color: var(--muted); }
+.module-add-panel input[type="text"] { width: 130px; background: var(--bg); color: var(--ink); border: 1px solid var(--line); border-radius: 5px; padding: 5px 7px; font: inherit; text-align: left; }
 
 /* Cut-list scope toggle (Module ⇄ Job) */
 .cut-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -270,11 +285,11 @@ tbody tr.cl-selected td { color: var(--ink); }
 
 /* ---------- AI Design Copilot ---------- */
 #ai-fab {
-  position: fixed; right: 18px; bottom: 18px; z-index: 50;
-  background: var(--accent); color: #2a1d02; font-weight: 600; border: 0;
-  padding: 10px 16px; border-radius: 22px; box-shadow: 0 4px 14px #0006; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 6px 9px; cursor: pointer;
 }
-#ai-fab:hover { filter: brightness(1.06); }
+#ai-fab svg { display: block; }
+#ai-fab:hover { border-color: var(--accent); color: var(--accent); }
 #ai-fab.hidden { display: none; }
 
 .ai-panel {
