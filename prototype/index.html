@@ -6,7 +6,7 @@
   <title>Cabinet &amp; Cupboard Cut List — Prototype</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body class="no-modules">
   <header class="topbar">
     <h1>Cabinet &amp; Cupboard Cut List <span class="tag">prototype</span></h1>
     <div class="top-actions">
@@ -27,6 +27,11 @@
     <aside class="panel left">
       <section class="card" id="card-components">
         <h2>Components</h2>
+        <div class="panel-empty" id="components-empty">
+          <div class="panel-empty-ico" aria-hidden="true">⊞</div>
+          <p class="panel-empty-title">No module yet</p>
+          <p class="panel-empty-sub">Click <b>+ Module</b> above, then add shelves, verticals, drawers and doors from here.</p>
+        </div>
         <div class="btn-row">
           <button id="btn-add-shelf" type="button">+ Shelf</button>
           <button id="btn-add-vertical" type="button">+ Vertical</button>
@@ -199,6 +204,11 @@
           </table>
         </div>
         <div id="cutlist-summary" class="summary"></div>
+        <div class="panel-empty" id="cutlist-empty">
+          <div class="panel-empty-ico" aria-hidden="true">▤</div>
+          <p class="panel-empty-title">Nothing to cut yet</p>
+          <p class="panel-empty-sub">Add a module and your parts — sizes, quantities and edging — appear here.</p>
+        </div>
         <div class="btn-row">
           <button id="btn-export" type="button">Export CSV</button>
           <button id="btn-pdf" type="button">Export PDF</button>

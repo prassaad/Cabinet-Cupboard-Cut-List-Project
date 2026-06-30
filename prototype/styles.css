@@ -71,6 +71,8 @@ button.full { width: 100%; margin-top: 8px; }
   padding: 12px;
 }
 .card.grow { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* Left Components card fills its column too, so both side panels match the full-height cut list */
+.panel.left #card-components { flex: 1; }
 .card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .card h2 small { text-transform: none; letter-spacing: 0; }
 .card h3.sub { margin: 14px 0 10px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
@@ -96,10 +98,23 @@ select {
 
 .card.hidden { display: none; }
 
-/* Empty job (no modules): hide the editing panels — only the module bar + canvas prompt remain */
+/* Empty job (no modules): keep the 3-column layout intact so the canvas isn't a lone
+   floating card. The side panels stay in place but swap their editing controls for a
+   friendly empty-state placeholder. */
 .setup-empty { display: none; color: var(--muted); font-size: 13px; max-width: 760px; }
-body.no-modules #card-components,
-body.no-modules .panel.right > .card,
+.panel-empty { display: none; text-align: center; padding: 24px 8px; color: var(--muted); }
+.panel-empty-ico { font-size: 30px; line-height: 1; opacity: .5; margin-bottom: 10px; }
+.panel-empty-title { margin: 0 0 6px; font-size: 13px; font-weight: 600; color: var(--ink); }
+.panel-empty-sub { margin: 0; font-size: 12px; }
+.panel-empty-sub b { color: var(--ink); font-weight: 600; }
+/* hide the real left-panel controls, keep only the heading + placeholder */
+body.no-modules #card-components > :not(h2):not(.panel-empty) { display: none; }
+/* hide the real right-panel cut-list controls, keep the heading + placeholder */
+body.no-modules .panel.right .cut-scope,
+body.no-modules .panel.right .table-wrap,
+body.no-modules .panel.right .summary,
+body.no-modules .panel.right .btn-row { display: none; }
+body.no-modules .panel-empty { display: block; }
 body.no-modules .setup-intro,
 body.no-modules .setup-grid { display: none; }
 body.no-modules .setup-empty { display: block; }
