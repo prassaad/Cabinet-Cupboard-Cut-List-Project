@@ -40,7 +40,10 @@
           <button id="btn-add-drawer" type="button">+ Drawers</button>
           <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="3" /></label>
         </div>
-        <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D, click a face to select.</p>
+        <details class="hint-help">
+          <summary>How this works</summary>
+          <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D, click a face to select.</p>
+        </details>
 
         <h3 class="sub">Doors / fronts</h3>
         <label>Leaves
@@ -52,14 +55,20 @@
         <button id="btn-add-door" type="button" class="full">+ Door into cell</button>
         <button id="btn-door-cells" type="button" class="full">⊞ Pick cells for door</button>
         <div id="door-cells-bar" class="hidden">
-          <p class="hint">Click bays in the design to combine them, then place one door spanning the picked region (it crosses the shelves you included, and stops at the ones you left out).</p>
+          <details class="hint-help">
+            <summary>How this works</summary>
+            <p class="hint">Click bays in the design to combine them, then place one door spanning the picked region (it crosses the shelves you included, and stops at the ones you left out).</p>
+          </details>
           <div class="btn-row">
             <button id="btn-door-place" type="button" disabled>Place door (0)</button>
             <button id="btn-door-cancel" type="button" class="ghost">Cancel</button>
           </div>
         </div>
         <label>Reveal gap <input id="in-reveal" type="number" min="0" step="0.5" /></label>
-        <p class="hint">"+ Door into cell" fits the single clicked bay. Use "Pick cells for door" to combine several bays across shelves into one door. Select a door to change its leaves, front (inset/outset) or Covers.</p>
+        <details class="hint-help">
+          <summary>How this works</summary>
+          <p class="hint">"+ Door into cell" fits the single clicked bay. Use "Pick cells for door" to combine several bays across shelves into one door. Select a door to change its leaves, front (inset/outset) or Covers.</p>
+        </details>
 
         <button id="btn-delete" type="button" class="ghost full" disabled>Delete selected</button>
       </section>
@@ -150,6 +159,39 @@
               <label id="lbl-back-groove">Groove / rebate depth <input id="in-back-groove" type="number" min="0" step="1" /></label>
               <label id="lbl-back-setback">Setback from rear <input id="in-back-setback" type="number" min="0" step="1" /></label>
               <p class="hint">Overlay = full panel on the rear. Groove/rabbet = inset panel housed in the carcass; depth = how far it sits into the groove, setback = how far it's recessed from the back.</p>
+            </section>
+
+            <section class="card" id="card-caps">
+              <h2>Top &amp; bottom panels <small class="unit-label">(mm)</small></h2>
+              <label>Top mount
+                <select id="in-top-mount">
+                  <option value="inset">Inset (between sides)</option>
+                  <option value="outset">Outset (caps over sides)</option>
+                </select>
+              </label>
+              <label>Top depth <input id="in-top-depth" type="number" min="1" step="1" /></label>
+              <label>Top anchor
+                <select id="in-top-anchor">
+                  <option value="back">Back</option>
+                  <option value="center">Center</option>
+                  <option value="front">Front</option>
+                </select>
+              </label>
+              <label>Bottom mount
+                <select id="in-bot-mount">
+                  <option value="inset">Inset (between sides)</option>
+                  <option value="outset">Outset (caps over sides)</option>
+                </select>
+              </label>
+              <label>Bottom depth <input id="in-bot-depth" type="number" min="1" step="1" /></label>
+              <label>Bottom anchor
+                <select id="in-bot-anchor">
+                  <option value="back">Back</option>
+                  <option value="center">Center</option>
+                  <option value="front">Front</option>
+                </select>
+              </label>
+              <p class="hint">Inset = panel sits between the sides (sides run full height); Outset = panel caps over the sides at full width (sides shorten by the panel thickness). Depth is independent of the sides — it may be shallower or deeper than the cabinet; anchor places it against the back, front or centre. Defaults match the sides. Cut list updates automatically.</p>
             </section>
 
             <section class="card">

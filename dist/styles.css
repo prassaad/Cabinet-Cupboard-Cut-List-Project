@@ -93,6 +93,14 @@ select {
 .drawer-row .qty { display: flex; align-items: center; gap: 6px; color: var(--muted); margin: 0; }
 .drawer-row .qty input { width: 52px; }
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+/* Collapsible help — collapsed by default; user clicks the summary to reveal the hint. */
+.hint-help { margin: 10px 0 0; }
+.hint-help > summary { color: var(--muted); font-size: 12px; cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; user-select: none; }
+.hint-help > summary::-webkit-details-marker { display: none; }
+.hint-help > summary::before { content: '?'; display: inline-flex; width: 15px; height: 15px; align-items: center; justify-content: center; border: 1px solid currentColor; border-radius: 50%; font-size: 10px; line-height: 1; }
+.hint-help > summary:hover { color: var(--ink); }
+.hint-help[open] > summary { color: var(--ink); margin-bottom: 2px; }
+.hint-help > .hint { margin-top: 4px; }
 
 .card.hidden { display: none; }
 

@@ -26,7 +26,11 @@ const defaultBand = () => ({
 const DEFAULTS = () => ({
   unit: 'mm',
   preset: 'custom',
-  cab: { w: 1200, h: 2400, d: 580, t: 20, back: true },
+  cab: { w: 1200, h: 2400, d: 580, t: 20, back: true,
+         // Editable top/bottom caps. mount: 'inset' (between sides, default — aligned to the sides) | 'outset' (caps over the sides).
+         // depth: null = full cabinet depth; a smaller value is placed per anchor ('back' | 'center' | 'front').
+         top: { mount: 'inset', depth: null, anchor: 'back' },
+         bottom: { mount: 'inset', depth: null, anchor: 'back' } },
   backPanel: { type: 'groove', thickness: 6, groove: 6, setback: 19 },   // type: groove | rabbet | overlay. setback 19 + thickness 6 => shelf/vertical depth = d - 25 (e.g. 580 -> 555)
   comps: [],                 // {id,type:'shelf'|'vertical',pos, a0,a1}  span: shelf=x-range, vertical=y-range
   doors: { reveal: 2 },   // reveal is the global gap; door fronts are now cell-bound components
@@ -63,6 +67,8 @@ const inW = $('in-w'), inH = $('in-h'), inD = $('in-d'), inT = $('in-t'), inBack
 const inSW = $('in-sw'), inSH = $('in-sh'), inKerf = $('in-kerf'), inGrain = $('in-grain'), inPreset = $('in-preset');
 const inReveal = $('in-reveal'), inExplode = $('in-explode'), inDims = $('in-dims');
 const inBackType = $('in-back-type'), inBackThk = $('in-back-thk'), inBackGroove = $('in-back-groove'), inBackSetback = $('in-back-setback');
+const inTopMount = $('in-top-mount'), inTopDepth = $('in-top-depth'), inTopAnchor = $('in-top-anchor');
+const inBotMount = $('in-bot-mount'), inBotDepth = $('in-bot-depth'), inBotAnchor = $('in-bot-anchor');
 const designCanvas = $('design-canvas'), sheetCanvas = $('sheet-canvas'), roomCanvas = $('room-canvas');
 const dctx = designCanvas.getContext('2d');
 const sctx = sheetCanvas.getContext('2d');
@@ -101,6 +107,26 @@ const backFront = () => S.cab.back ? backGeom().front : 0;   // z where the usab
 const usableDepth = () => Math.max(1, S.cab.d - backFront());
 // Effective depth (board width) of a shelf/vertical: its own override (clamped to usable), else the usable depth itself.
 const compDepth = (c) => c.depth != null ? Math.max(1, Math.min(c.depth, usableDepth())) : usableDepth();
+
+// ---------- Carcass top/bottom caps (editable) ----------
+// Each cap: { mount:'inset'|'outset', depth:null|mm, anchor:'back'|'center'|'front' }.
+//  - inset (default): sits between the sides — length w-2t, and the sides run the full height.
+//  - outset: caps over the sides — length w (full width), and the sides shorten by t at that end.
+// depth is the front-to-back board size (null = full cabinet depth); anchor places a shallow cap in depth.
+const capOf = (which) => S.cab[which] || { mount: 'inset', depth: null, anchor: 'back' };
+const capOutset = (which) => capOf(which).mount === 'outset';
+const capDepth = (which) => { const c = capOf(which); return c.depth != null ? Math.max(1, c.depth) : S.cab.d; };   // loosely coupled: may exceed cabinet depth
+const capWidth = (which) => capOutset(which) ? S.cab.w : Math.max(1, S.cab.w - 2 * S.cab.t);
+const capXRange = (which) => capOutset(which) ? { x0: 0, x1: S.cab.w } : { x0: S.cab.t, x1: S.cab.w - S.cab.t };
+function capZRange(which) {                                    // z=0 is the rear, z=d the front face
+  const d = S.cab.d, dep = capDepth(which), a = capOf(which).anchor || 'back';
+  const z0 = a === 'front' ? d - dep : a === 'center' ? (d - dep) / 2 : 0;
+  return { z0, z1: z0 + dep };
+}
+// Side panels sit between the outset caps, so they shorten where a cap overlays them.
+const sideY0 = () => capOutset('bottom') ? S.cab.t : 0;
+const sideY1 = () => capOutset('top') ? S.cab.h - S.cab.t : S.cab.h;
+const sideHeight = () => Math.max(1, sideY1() - sideY0());
 
 // ---------- Geometry: cells, spans, segments ----------
 function normalizeComps() {
@@ -232,11 +258,17 @@ function drawerParts(c) {
 // carcass faces use string ids ('L','R','T','B','BK'), components/doors/drawers use their numeric id.
 function cutListInstances() {
   const { w, h, d, t, back } = S.cab;
-  const innerW = Math.max(0, w - 2 * t);
   const items = [];
   const add = (name, key, length, width, srcId) => items.push({ name, key, length, width, srcId });
-  add('Side', 'Side', h, d, 'L'); add('Side', 'Side', h, d, 'R');
-  add('Top / Bottom', 'TopBottom', innerW, d, 'T'); add('Top / Bottom', 'TopBottom', innerW, d, 'B');
+  // Sides shorten where an outset cap overlays them; width is the full depth.
+  add('Side', 'Side', sideHeight(), d, 'L'); add('Side', 'Side', sideHeight(), d, 'R');
+  // Top/bottom caps: length depends on mount (inset = w-2t, outset = w), width = the cap's own depth.
+  const topLen = capWidth('top'), topW = capDepth('top'), botLen = capWidth('bottom'), botW = capDepth('bottom');
+  if (topLen === botLen && topW === botW) {   // identical caps stay grouped as "Top / Bottom" (qty 2)
+    add('Top / Bottom', 'TopBottom', topLen, topW, 'T'); add('Top / Bottom', 'TopBottom', botLen, botW, 'B');
+  } else {                                     // they differ — list separately so sizes are unambiguous
+    add('Top', 'TopBottom', topLen, topW, 'T'); add('Bottom', 'TopBottom', botLen, botW, 'B');
+  }
   if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W, 'BK'); }
   for (const c of S.comps) {
     if (c.type === 'shelf') for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c), c.id);
@@ -518,10 +550,11 @@ function renderDesign() {
 
   fillRectMM(dctx, { x0: t, x1: w - t, y0: t, y1: h - t }, '#222831', null);
   const wall = '#6b7686', wline = '#aeb7c6';
-  fillRectMM(dctx, { x0: 0, x1: t, y0: 0, y1: h }, wall, wline);
-  fillRectMM(dctx, { x0: w - t, x1: w, y0: 0, y1: h }, wall, wline);
-  fillRectMM(dctx, { x0: t, x1: w - t, y0: 0, y1: t }, wall, wline);
-  fillRectMM(dctx, { x0: t, x1: w - t, y0: h - t, y1: h }, wall, wline);
+  const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
+  fillRectMM(dctx, { x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
+  fillRectMM(dctx, { x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
+  fillRectMM(dctx, { x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
+  fillRectMM(dctx, { x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
 
   for (const c of S.comps) {
     if (c.type === 'drawer') continue;
@@ -568,8 +601,10 @@ function buildBoxes() {
   const wood = [196, 165, 110], backCol = [138, 107, 63], shelfCol = [185, 143, 87], vertCol = [173, 130, 75], doorCol = [170, 140, 95];
   const boxes = [];
   const push = (x0, x1, y0, y1, z0, z1, base, id, alpha) => boxes.push({ x0, x1, y0, y1, z0, z1, base, id, alpha: alpha || 1 });
-  push(0, t, 0, h, 0, d, wood, 'L'); push(w - t, w, 0, h, 0, d, wood, 'R');
-  push(t, w - t, 0, t, 0, d, wood, 'B'); push(t, w - t, h - t, h, 0, d, wood, 'T');
+  const sy0 = sideY0(), sy1 = sideY1();
+  push(0, t, sy0, sy1, 0, d, wood, 'L'); push(w - t, w, sy0, sy1, 0, d, wood, 'R');
+  const bX = capXRange('bottom'), bZ = capZRange('bottom'), tX = capXRange('top'), tZ = capZRange('top');
+  push(bX.x0, bX.x1, 0, t, bZ.z0, bZ.z1, wood, 'B'); push(tX.x0, tX.x1, h - t, h, tZ.z0, tZ.z1, wood, 'T');
   const bg = back ? backGeom() : null;
   const zF = bg ? bg.front : 0;
   if (bg) push(bg.x0, bg.x1, bg.y0, bg.y1, bg.z0, bg.z1, backCol, 'BK');
@@ -770,10 +805,11 @@ function drawModuleElevation(ctx, m, worldToScreen) {
     const { w, h, t } = S.cab, fillR = (r, f, s) => fillRectWorld(ctx, r, f, s, tf);
     fillR({ x0: t, x1: w - t, y0: t, y1: h - t }, '#222831', null);
     const wall = '#6b7686', wline = '#aeb7c6';
-    fillR({ x0: 0, x1: t, y0: 0, y1: h }, wall, wline);
-    fillR({ x0: w - t, x1: w, y0: 0, y1: h }, wall, wline);
-    fillR({ x0: t, x1: w - t, y0: 0, y1: t }, wall, wline);
-    fillR({ x0: t, x1: w - t, y0: h - t, y1: h }, wall, wline);
+    const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
+    fillR({ x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
+    fillR({ x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
+    fillR({ x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
+    fillR({ x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
     for (const c of S.comps) { if (c.type === 'drawer') continue; fillR(partRect(c), '#cba03a', '#f1e4ba'); }
     for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFronts(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, 'rgba(203,160,58,0.92)', '#f1e4ba');
     for (const r of doorRects()) fillR({ x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y1 }, 'rgba(190,160,105,0.30)', '#d9c08a');
@@ -895,7 +931,10 @@ function syncInputs() {
   inReveal.value = fmt(S.doors.reveal); inExplode.value = S.explode; inDims.checked = S.showDims;
   inBackType.value = S.backPanel.type; inBackThk.value = fmt(S.backPanel.thickness);
   inBackGroove.value = fmt(S.backPanel.groove); inBackSetback.value = fmt(S.backPanel.setback);
-  const step = unitStep(); [inW, inH, inD, inT, inSW, inSH, inBackThk, inBackGroove, inBackSetback].forEach(el => el.step = step);
+  const top = capOf('top'), bot = capOf('bottom');
+  inTopMount.value = top.mount || 'inset'; inTopAnchor.value = top.anchor || 'back'; inTopDepth.value = fmt(capDepth('top'));
+  inBotMount.value = bot.mount || 'inset'; inBotAnchor.value = bot.anchor || 'back'; inBotDepth.value = fmt(capDepth('bottom'));
+  const step = unitStep(); [inW, inH, inD, inT, inSW, inSH, inBackThk, inBackGroove, inBackSetback, inTopDepth, inBotDepth].forEach(el => el.step = step);
   inKerf.step = S.unit === 'mm' ? 0.1 : 0.01; inReveal.step = S.unit === 'mm' ? 0.5 : 0.01;
   $('unit-mm').classList.toggle('active', S.unit === 'mm'); $('unit-in').classList.toggle('active', S.unit === 'in');
   $('v2d').classList.toggle('active', S.viewMode !== '3d'); $('v3d').classList.toggle('active', S.viewMode === '3d');
@@ -914,6 +953,7 @@ function readInputs() {
   S.cab.back = inBack.checked;
   S.sheet.w = Math.max(1, toMM(parseFloat(inSW.value) || 0)); S.sheet.h = Math.max(1, toMM(parseFloat(inSH.value) || 0));
   S.sheet.kerf = Math.max(0, toMM(parseFloat(inKerf.value) || 0));
+  // caps are loosely coupled — their depth may exceed the cabinet depth, so no clamping here
   // keep spans inside the (possibly resized) carcass
   for (const c of S.comps) { if (c.type === 'shelf' || c.type === 'vertical') { const lim = c.type === 'shelf' ? S.cab.w - S.cab.t : S.cab.h - S.cab.t; c.a0 = Math.max(S.cab.t, Math.min(c.a0, lim)); c.a1 = Math.max(c.a0, Math.min(c.a1, lim)); } if (c.depth != null) c.depth = Math.min(c.depth, S.cab.d); if (c.setback != null) c.setback = Math.min(c.setback, S.cab.d); clampComp(c); }
   render();
@@ -953,9 +993,10 @@ function deleteSelected() { if (S.selectedId != null) { if (typeof S.selectedId 
 // ---------- Selected-component editor ----------
 // Fixed carcass/door parts (selected by clicking a face in 3D) have a string id; report their size read-only.
 function carcassPartInfo(id) {
-  const { w, h, d, t } = S.cab;
-  if (id === 'L' || id === 'R') return { name: 'Side', length: h, width: d };
-  if (id === 'T' || id === 'B') return { name: 'Top / Bottom', length: Math.max(0, w - 2 * t), width: d };
+  const { d } = S.cab;
+  if (id === 'L' || id === 'R') return { name: 'Side', length: sideHeight(), width: d };
+  if (id === 'T') return { name: 'Top', length: capWidth('top'), width: capDepth('top') };
+  if (id === 'B') return { name: 'Bottom', length: capWidth('bottom'), width: capDepth('bottom') };
   if (id === 'BK') { if (!S.cab.back) return null; const g = backGeom(); return { name: 'Back', length: g.L, width: g.W }; }
   if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? { name: 'Door', length: r.y1 - r.y0, width: r.x1 - r.x0 } : null; }
   return null;
@@ -968,6 +1009,7 @@ function renderSelectionPanel() {
   // While the user is actively typing/selecting in this component's fields, don't rebuild them (keeps caret/focus for live edits).
   if (fields.dataset.editId === String(id) && document.activeElement && fields.contains(document.activeElement)) { card.classList.remove('hidden'); return; }
   const u = S.unit, step = unitStep();
+  $('sel-delete').classList.remove('hidden');   // shown by default; the cap/read-only branches hide it
   const comp = typeof id === 'number' ? S.comps.find(c => c.id === id) : null;
   const row = (rid, label, val) => `<label class="sel-row"><span>${label}</span><input id="${rid}" type="number" step="${step}" value="${val}"></label>`;
   const sel = (v) => lastAnchor === v ? ' selected' : '';
@@ -1024,6 +1066,20 @@ function renderSelectionPanel() {
       (comp.depth != null ? 'Custom depth' : `Depth = usable ${fmtU(usable)}`) +
       ` · Setback = gap from the back panel front face.`;
     actions.classList.remove('hidden');
+  } else if (id === 'T' || id === 'B') {
+    // Editable top/bottom cap — same props as the setup card, reachable by selecting the panel in 2D/3D/cut list.
+    const which = id === 'T' ? 'top' : 'bottom', cap = capOf(which);
+    const mnt = capOutset(which) ? 'outset' : 'inset', anc = cap.anchor || 'back';
+    const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
+    const optA = (v, lbl) => `<option value="${v}"${anc === v ? ' selected' : ''}>${lbl}</option>`;
+    title.innerHTML = `${which === 'top' ? 'Top' : 'Bottom'} panel <small>(${u})</small>`;
+    fields.innerHTML =
+      `<label class="sel-row"><span>Mount</span><select id="sel-cap-mount">${optM('inset', 'Inset (between sides)')}${optM('outset', 'Outset (over sides)')}</select></label>` +
+      row('sel-cap-depth', 'Depth', fmt(capDepth(which))) +
+      `<label class="sel-row"><span>Anchor</span><select id="sel-cap-anchor">${optA('back', 'Back')}${optA('center', 'Center')}${optA('front', 'Front')}</select></label>`;
+    derived.textContent = `Panel ${fmtU(capWidth(which))} × ${fmtU(capDepth(which))} · ${mnt}. Sides now ${fmtU(sideHeight())}. Depth = full ⇒ aligned to sides.`;
+    actions.classList.remove('hidden');
+    $('sel-delete').classList.add('hidden');   // structural part — no delete
   } else {
     const info = carcassPartInfo(id);
     if (!info) { card.classList.add('hidden'); fields.innerHTML = ''; return; }
@@ -1039,6 +1095,15 @@ function renderSelectionPanel() {
   card.classList.remove('hidden');
 }
 function applySelectedEdit() {
+  if (S.selectedId === 'T' || S.selectedId === 'B') {
+    const which = S.selectedId === 'T' ? 'top' : 'bottom';
+    const cap = S.cab[which] || (S.cab[which] = { mount: 'inset', depth: null, anchor: 'back' });
+    cap.mount = (($('sel-cap-mount') || {}).value) === 'outset' ? 'outset' : 'inset';
+    const av = ($('sel-cap-anchor') || {}).value; cap.anchor = ['back', 'center', 'front'].includes(av) ? av : 'back';
+    const dep = toMM(parseFloat(($('sel-cap-depth') || {}).value) || 0);
+    cap.depth = (dep > 0.5 && Math.abs(dep - S.cab.d) > 0.5) ? Math.max(1, dep) : null;   // equal to cabinet depth ⇒ aligned; otherwise stored, may exceed it
+    syncInputs(); render(); return;   // syncInputs keeps the setup-card fields in step
+  }
   const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null;
   if (!c) return;
   const get = (rid) => { const el = $(rid); return el ? toMM(parseFloat(el.value) || 0) : 0; };
@@ -1120,6 +1185,10 @@ function hitTest(mx, my) {
     if (c.type === 'door') { const cl = doorBase(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
     const r = partRect(c); if (mx >= r.x0 - tol && mx <= r.x1 + tol && my >= r.y0 - tol && my <= r.y1 + tol) return c;
   }
+  // Carcass top/bottom rails (editable): fall through to these only if no component was hit.
+  const { h, t } = S.cab, tX = capXRange('top'), bX = capXRange('bottom');
+  if (my >= h - t - tol && my <= h + tol && mx >= tX.x0 - tol && mx <= tX.x1 + tol) return { id: 'T' };
+  if (my >= -tol && my <= t + tol && mx >= bX.x0 - tol && mx <= bX.x1 + tol) return { id: 'B' };
   return null;
 }
 let drag = null;
@@ -1128,8 +1197,9 @@ designCanvas.addEventListener('mousedown', (e) => {
   const { mx, my } = eventToMM(e); S.lastPoint = { x: mx, y: my };
   if (cellMode) { toggleCellAt(mx, my); return; }   // pick/unpick a bay; no drag while combining cells
   const hit = hitTest(mx, my); S.selectedId = hit ? hit.id : null;
-  if (hit) drag = { type: 'part', comp: hit };
-  else drag = { type: 'pan', x: e.clientX, y: e.clientY };   // drag empty space to pan
+  if (hit && typeof hit.id === 'number') drag = { type: 'part', comp: hit };   // only real components drag
+  else if (!hit) drag = { type: 'pan', x: e.clientX, y: e.clientY };            // drag empty space to pan
+  // a carcass rail (string id) just selects — no drag
   designCanvas.style.cursor = 'grabbing';
   render();
 });
@@ -1281,6 +1351,8 @@ const STORE_KEY = 'cabinet-cutlist-prototype';   // legacy single-module save (r
 const JOB_KEY = 'cabinet-cutlist-job';           // current job (multi-module) save
 function hydrateModule(raw) {
   const m = Object.assign(DEFAULTS(), raw);
+  if (!m.cab.top) m.cab.top = { mount: 'inset', depth: null, anchor: 'back' };        // older saves predate editable caps
+  if (!m.cab.bottom) m.cab.bottom = { mount: 'inset', depth: null, anchor: 'back' };
   for (const c of m.comps) if (c.type === 'divider') c.type = 'vertical';   // migrate old terminology
   if (m.band && m.band.Divider) { m.band.Vertical = m.band.Divider; delete m.band.Divider; }
   m.band = Object.assign(defaultBand(), m.band || {});
@@ -1371,6 +1443,20 @@ function readBack() {
 }
 inBackType.addEventListener('change', readBack);
 [inBackThk, inBackGroove, inBackSetback].forEach(el => el.addEventListener('input', readBack));
+function readCaps() {
+  const rd = (which, mountEl, depthEl, anchorEl) => {
+    const c = S.cab[which] || (S.cab[which] = { mount: 'inset', depth: null, anchor: 'back' });
+    c.mount = mountEl.value === 'outset' ? 'outset' : 'inset';
+    c.anchor = ['back', 'center', 'front'].includes(anchorEl.value) ? anchorEl.value : 'back';
+    const dep = toMM(parseFloat(depthEl.value) || 0);
+    c.depth = (dep > 0.5 && Math.abs(dep - S.cab.d) > 0.5) ? Math.max(1, dep) : null;   // equal to cabinet depth => aligned (null); otherwise stored, may exceed it
+  };
+  rd('top', inTopMount, inTopDepth, inTopAnchor);
+  rd('bottom', inBotMount, inBotDepth, inBotAnchor);
+  render();
+}
+[inTopMount, inTopAnchor, inBotMount, inBotAnchor].forEach(el => el.addEventListener('change', readCaps));
+[inTopDepth, inBotDepth].forEach(el => el.addEventListener('input', readCaps));
 inGrain.addEventListener('change', () => { S.grainLock = inGrain.checked; render(); });
 inPreset.addEventListener('change', () => { S.preset = inPreset.value; if (PRESETS[S.preset]) { Object.assign(S.cab, PRESETS[S.preset]); readInputs(); syncInputs(); } });
 $('btn-add-door').addEventListener('click', () => addComp('door'));
@@ -1389,8 +1475,9 @@ $('sel-delete').addEventListener('click', deleteSelected);
 $('sel-close').addEventListener('click', () => { S.selectedId = null; render(); });
 $('sel-fields').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applySelectedEdit(); } });
 // Drawer banks apply live as you type; drawer + door dropdowns apply on change (other parts still use the Update button).
-const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if (c && c.type === 'drawer') applySelectedEdit(); };
-const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if (c && (c.type === 'drawer' || c.type === 'door')) applySelectedEdit(); };
+const isCapSel = () => S.selectedId === 'T' || S.selectedId === 'B';
+const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && c.type === 'drawer') || isCapSel()) applySelectedEdit(); };
+const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
 $('sel-fields').addEventListener('change', liveChange);
 $('sel-fields').addEventListener('click', (e) => {
