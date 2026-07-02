@@ -26,11 +26,11 @@ const defaultBand = () => ({
 const DEFAULTS = () => ({
   unit: 'mm',
   preset: 'custom',
-  cab: { w: 1200, h: 2400, d: 580, t: 20, back: true,
+  cab: { w: 1200, h: 2400, d: 580, t: 20, back: true, sideL: true, sideR: true,   // sideL/sideR/back/*.on = panel present (deletable)
          // Editable top/bottom caps. mount: 'inset' (between sides, default — aligned to the sides) | 'outset' (caps over the sides).
-         // depth: null = full cabinet depth; a smaller value is placed per anchor ('back' | 'center' | 'front').
-         top: { mount: 'inset', depth: null, anchor: 'back' },
-         bottom: { mount: 'inset', depth: null, anchor: 'back' } },
+         // depth: null = full cabinet depth; a smaller value is placed per anchor ('back' | 'center' | 'front'). on:false removes the panel.
+         top: { mount: 'inset', depth: null, anchor: 'back', on: true },
+         bottom: { mount: 'inset', depth: null, anchor: 'back', on: true } },
   backPanel: { type: 'groove', thickness: 6, groove: 6, setback: 19 },   // type: groove | rabbet | overlay. setback 19 + thickness 6 => shelf/vertical depth = d - 25 (e.g. 580 -> 555)
   comps: [],                 // {id,type:'shelf'|'vertical',pos, a0,a1}  span: shelf=x-range, vertical=y-range
   doors: { reveal: 2 },   // reveal is the global gap; door fronts are now cell-bound components
@@ -42,11 +42,21 @@ const DEFAULTS = () => ({
   explode: 0,
   showDims: false,           // 3D measurement labels — default off, user can switch on per 3D session
   zoom: 1, pan: { x: 0, y: 0 },   // 2D view zoom + pan
-  zoom3d: 1,                      // 3D view zoom
+  zoom3d: 1, pan3d: { x: 0, y: 0 },   // 3D view zoom + screen-space pan
   lastPoint: null,           // mm point used as insertion cell anchor
   selectedId: null,
+  woodTheme: 'birch',        // 3D/2D wood finish palette (see WOOD_THEMES)
   _seq: 1,
 });
+
+// Switchable wood finishes. `wood/back/shelf/vert/door` are 3D RGB bases (per-face shading is applied on
+// top); `p2d`/`e2d` are the 2D part fill + edge stroke. Selection always highlights amber for contrast.
+const WOOD_THEMES = {
+  birch:  { label: 'Birch',  wood: [224, 208, 170], back: [190, 172, 132], shelf: [218, 201, 161], vert: [212, 194, 154], door: [221, 204, 164], p2d: '#d8c79f', e2d: '#efe3bd' },
+  oak:    { label: 'Oak',    wood: [206, 176, 120], back: [168, 138, 88],  shelf: [200, 170, 114], vert: [194, 164, 108], door: [203, 173, 117], p2d: '#cdae78', e2d: '#e7d3a6' },
+  walnut: { label: 'Walnut', wood: [124, 92, 60],   back: [92, 66, 42],    shelf: [116, 86, 56],   vert: [110, 82, 52],   door: [120, 90, 58],   p2d: '#8a6742', e2d: '#b08a5f' },
+};
+const woodPal = () => WOOD_THEMES[S.woodTheme] || WOOD_THEMES.birch;
 
 let S = DEFAULTS();
 S.name = '';   // dummy working state; no module is active until the user adds one
@@ -69,6 +79,8 @@ const inReveal = $('in-reveal'), inExplode = $('in-explode'), inDims = $('in-dim
 const inBackType = $('in-back-type'), inBackThk = $('in-back-thk'), inBackGroove = $('in-back-groove'), inBackSetback = $('in-back-setback');
 const inTopMount = $('in-top-mount'), inTopDepth = $('in-top-depth'), inTopAnchor = $('in-top-anchor');
 const inBotMount = $('in-bot-mount'), inBotDepth = $('in-bot-depth'), inBotAnchor = $('in-bot-anchor');
+const inTopOn = $('in-top-on'), inBotOn = $('in-bot-on'), inSideL = $('in-side-l'), inSideR = $('in-side-r');
+const inWoodTheme = $('in-wood-theme');
 const designCanvas = $('design-canvas'), sheetCanvas = $('sheet-canvas'), roomCanvas = $('room-canvas');
 const dctx = designCanvas.getContext('2d');
 const sctx = sheetCanvas.getContext('2d');
@@ -123,9 +135,13 @@ function capZRange(which) {                                    // z=0 is the rea
   const z0 = a === 'front' ? d - dep : a === 'center' ? (d - dep) / 2 : 0;
   return { z0, z1: z0 + dep };
 }
-// Side panels sit between the outset caps, so they shorten where a cap overlays them.
-const sideY0 = () => capOutset('bottom') ? S.cab.t : 0;
-const sideY1 = () => capOutset('top') ? S.cab.h - S.cab.t : S.cab.h;
+// Panel presence (deletable). Missing flag => present (defensive for older saves).
+const capOn = (which) => { const c = S.cab[which]; return !c || c.on !== false; };
+const sideLOn = () => S.cab.sideL !== false;
+const sideROn = () => S.cab.sideR !== false;
+// Side panels sit between the outset caps, so they shorten where a present cap overlays them.
+const sideY0 = () => (capOn('bottom') && capOutset('bottom')) ? S.cab.t : 0;
+const sideY1 = () => (capOn('top') && capOutset('top')) ? S.cab.h - S.cab.t : S.cab.h;
 const sideHeight = () => Math.max(1, sideY1() - sideY0());
 
 // ---------- Geometry: cells, spans, segments ----------
@@ -185,9 +201,19 @@ const doorMount = (c) => (c.mount === 'inset' ? 'inset' : 'outset');
 // The opening a door fills: an explicit multi-cell `span` (built by picking cells) if present,
 // otherwise the cell at its anchor expanded per its Covers mode. Shape: {left,right,bottom,top}.
 const doorBase = (c) => c.span ? c.span : cellAt(c.ax, c.ay, null, doorCoverOpts(c));
+// Vertical placement within the opening: optional Height (c.h) and From-bottom offset (c.yoff) let a door
+// occupy just part of a column — e.g. above a drawer — with NO dividing shelf. `freeTop`/`freeBottom` mark
+// the open edges introduced by that partial sizing (they get a clean reveal gap instead of an overlay lip).
+function doorSpan(c) {
+  const base = doorBase(c), ch = base.top - base.bottom;
+  const H = c.h != null ? Math.max(1, Math.min(c.h, ch)) : ch;
+  const off = Math.max(0, Math.min(c.yoff || 0, ch - H));
+  const bottom = base.bottom + off;
+  return { left: base.left, right: base.right, bottom, top: bottom + H, freeBottom: off > 0.5, freeTop: (ch - off - H) > 0.5 };
+}
 function doorRectsFor(c) {
   const g = S.doors.reveal, t = S.cab.t, { w, h } = S.cab, mount = doorMount(c);
-  const cell = doorBase(c);
+  const cell = doorSpan(c);
   let x0, x1, y0, y1;
   if (mount === 'inset') {
     // Inset: fit inside the opening, reveal deducted on all four sides.
@@ -195,14 +221,14 @@ function doorRectsFor(c) {
     y0 = cell.bottom + g / 2; y1 = cell.top - g / 2;
   } else {
     // Overlay: NO deductions. Reach the carcass outer face on exterior sides, and the divider
-    // centerline on interior sides (so the door overlays half the divider). Two overlay doors that
-    // share a divider meet at the centerline — a reveal gap between separate doors is a later add-on.
+    // centerline on interior sides (so the door overlays half the divider). An open edge from partial
+    // sizing (freeTop/freeBottom) instead gets a reveal gap, so a stacked drawer + door sit flush.
     // eps tolerates float drift.
     const eps = 0.5;
     x0 = (Math.abs(cell.left   - t)       < eps) ? 0 : cell.left   - t / 2;
     x1 = (Math.abs(cell.right  - (w - t)) < eps) ? w : cell.right  + t / 2;
-    y0 = (Math.abs(cell.bottom - t)       < eps) ? 0 : cell.bottom - t / 2;
-    y1 = (Math.abs(cell.top    - (h - t)) < eps) ? h : cell.top    + t / 2;
+    y0 = cell.freeBottom ? cell.bottom + g / 2 : ((Math.abs(cell.bottom - t)       < eps) ? 0 : cell.bottom - t / 2);
+    y1 = cell.freeTop    ? cell.top    - g / 2 : ((Math.abs(cell.top    - (h - t)) < eps) ? h : cell.top    + t / 2);
   }
   if ((c.count | 0) === 2) { const mid = (x0 + x1) / 2; return [{ x0, x1: mid - g / 2, y0, y1, id: c.id, side: 'L', mount }, { x0: mid + g / 2, x1, y0, y1, id: c.id, side: 'R', mount }]; }
   return [{ x0, x1, y0, y1, id: c.id, side: '1', mount }];
@@ -220,18 +246,25 @@ function drawerRect(c) {
   const H = c.h != null ? Math.max(1, Math.min(c.h, ch)) : ch;
   let left = cell.left + (cw - W) / 2;
   left = Math.max(cell.left, Math.min(left, cell.right - W));
-  const bottom = (c.valign || 'bottom') === 'top' ? cell.top - H : cell.bottom;
+  // Vertical position: an explicit From-bottom offset (c.yoff) wins; otherwise the coarse valign anchor.
+  let bottom;
+  if (c.yoff != null) bottom = cell.bottom + Math.max(0, Math.min(c.yoff, ch - H));
+  else bottom = (c.valign || 'bottom') === 'top' ? cell.top - H : cell.bottom;
   return { left, right: left + W, bottom, top: bottom + H };
 }
 // The drawer fronts (one rect per stacked front). Inset fronts sit within the opening with a reveal gap;
 // outset (overlay) fronts grow by the overlay (t/2 onto each surrounding member) so they cover the carcass edges.
 function drawerFronts(c) {
-  const t = S.cab.t, cell = drawerRect(c), g = DRAWER.gap, n = Math.max(1, c.count | 0);
+  const t = S.cab.t, cell = drawerRect(c), full = cellAt(c.ax, c.ay, null), g = DRAWER.gap, n = Math.max(1, c.count | 0);
   const ov = c.mount === 'inset' ? 0 : t, half = ov / 2;
   const x0 = cell.left - half, x1 = cell.right + half;
-  const yBase = cell.bottom - half, fband = ((cell.top - cell.bottom) + ov) / n;
+  // Overlay overhangs half the material onto surrounding carcass, but an OPEN edge (partial bank stacked
+  // under a door, no shelf) recesses instead — so the fronts meet flush with no lip.
+  const yLo = (cell.bottom > full.bottom + 0.5) ? cell.bottom : cell.bottom - half;
+  const yHi = (cell.top < full.top - 0.5) ? cell.top : cell.top + half;
+  const fband = (yHi - yLo) / n;
   const fronts = [];
-  for (let i = 0; i < n; i++) fronts.push({ x0: x0 + g / 2, x1: x1 - g / 2, y0: yBase + i * fband + g / 2, y1: yBase + (i + 1) * fband - g / 2 });
+  for (let i = 0; i < n; i++) fronts.push({ x0: x0 + g / 2, x1: x1 - g / 2, y0: yLo + i * fband + g / 2, y1: yLo + (i + 1) * fband - g / 2 });
   return fronts;
 }
 function drawerParts(c) {
@@ -260,14 +293,17 @@ function cutListInstances() {
   const { w, h, d, t, back } = S.cab;
   const items = [];
   const add = (name, key, length, width, srcId) => items.push({ name, key, length, width, srcId });
-  // Sides shorten where an outset cap overlays them; width is the full depth.
-  add('Side', 'Side', sideHeight(), d, 'L'); add('Side', 'Side', sideHeight(), d, 'R');
-  // Top/bottom caps: length depends on mount (inset = w-2t, outset = w), width = the cap's own depth.
+  // Sides shorten where an outset cap overlays them; width is the full depth. Skip removed sides.
+  if (sideLOn()) add('Side', 'Side', sideHeight(), d, 'L');
+  if (sideROn()) add('Side', 'Side', sideHeight(), d, 'R');
+  // Top/bottom caps: length depends on mount (inset = w-2t, outset = w), width = the cap's own depth. Skip removed caps.
+  const topOn = capOn('top'), botOn = capOn('bottom');
   const topLen = capWidth('top'), topW = capDepth('top'), botLen = capWidth('bottom'), botW = capDepth('bottom');
-  if (topLen === botLen && topW === botW) {   // identical caps stay grouped as "Top / Bottom" (qty 2)
+  if (topOn && botOn && topLen === botLen && topW === botW) {   // both present & identical: grouped "Top / Bottom" (qty 2)
     add('Top / Bottom', 'TopBottom', topLen, topW, 'T'); add('Top / Bottom', 'TopBottom', botLen, botW, 'B');
-  } else {                                     // they differ — list separately so sizes are unambiguous
-    add('Top', 'TopBottom', topLen, topW, 'T'); add('Bottom', 'TopBottom', botLen, botW, 'B');
+  } else {                                                      // otherwise list whichever are present, separately
+    if (topOn) add('Top', 'TopBottom', topLen, topW, 'T');
+    if (botOn) add('Bottom', 'TopBottom', botLen, botW, 'B');
   }
   if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W, 'BK'); }
   for (const c of S.comps) {
@@ -536,7 +572,7 @@ function drawDrawer2D(c) {
   const sel = c.id === S.selectedId;
   for (const f of drawerFronts(c)) {
     const y1 = f.y1, r = { x0: f.x0, x1: f.x1, y0: f.y0, y1 };
-    fillRectMM(dctx, r, sel ? 'rgba(255,180,84,0.92)' : 'rgba(203,160,58,0.92)', sel ? '#ffd9a0' : '#f1e4ba');
+    fillRectMM(dctx, r, sel ? 'rgba(255,180,84,0.92)' : woodPal().p2d, sel ? '#ffd9a0' : woodPal().e2d);
     const cx = sx((r.x0 + r.x1) / 2), hy = sy(y1) + 14;          // handle near the top of each front
     dctx.strokeStyle = '#2a1d02'; dctx.lineWidth = 2; dctx.beginPath(); dctx.moveTo(cx - 18, hy); dctx.lineTo(cx + 18, hy); dctx.stroke();
   }
@@ -551,15 +587,16 @@ function renderDesign() {
   fillRectMM(dctx, { x0: t, x1: w - t, y0: t, y1: h - t }, '#222831', null);
   const wall = '#6b7686', wline = '#aeb7c6';
   const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
-  fillRectMM(dctx, { x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
-  fillRectMM(dctx, { x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
-  fillRectMM(dctx, { x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
-  fillRectMM(dctx, { x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
+  if (sideLOn()) fillRectMM(dctx, { x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
+  if (sideROn()) fillRectMM(dctx, { x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
+  if (capOn('bottom')) fillRectMM(dctx, { x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
+  if (capOn('top')) fillRectMM(dctx, { x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
 
+  const P2 = woodPal();
   for (const c of S.comps) {
     if (c.type === 'drawer') continue;
     const sel = c.id === S.selectedId;
-    fillRectMM(dctx, partRect(c), sel ? '#ffb454' : '#cba03a', sel ? '#ffd9a0' : '#f1e4ba');
+    fillRectMM(dctx, partRect(c), sel ? '#ffb454' : P2.p2d, sel ? '#ffd9a0' : P2.e2d);
   }
   for (const c of S.comps) if (c.type === 'drawer') drawDrawer2D(c);
   // dimension arrows BESIDE each part (shelf: above, vertical: right)
@@ -598,13 +635,15 @@ function renderDesign() {
 // ---------- 3D preview ----------
 function buildBoxes() {
   const { w, h, d, t, back } = S.cab;
-  const wood = [196, 165, 110], backCol = [138, 107, 63], shelfCol = [185, 143, 87], vertCol = [173, 130, 75], doorCol = [170, 140, 95];
+  const P = woodPal();   // active wood finish (Birch / Oak / Walnut)
+  const wood = P.wood, backCol = P.back, shelfCol = P.shelf, vertCol = P.vert, doorCol = P.door;
   const boxes = [];
   const push = (x0, x1, y0, y1, z0, z1, base, id, alpha) => boxes.push({ x0, x1, y0, y1, z0, z1, base, id, alpha: alpha || 1 });
   const sy0 = sideY0(), sy1 = sideY1();
-  push(0, t, sy0, sy1, 0, d, wood, 'L'); push(w - t, w, sy0, sy1, 0, d, wood, 'R');
-  const bX = capXRange('bottom'), bZ = capZRange('bottom'), tX = capXRange('top'), tZ = capZRange('top');
-  push(bX.x0, bX.x1, 0, t, bZ.z0, bZ.z1, wood, 'B'); push(tX.x0, tX.x1, h - t, h, tZ.z0, tZ.z1, wood, 'T');
+  if (sideLOn()) push(0, t, sy0, sy1, 0, d, wood, 'L');
+  if (sideROn()) push(w - t, w, sy0, sy1, 0, d, wood, 'R');
+  if (capOn('bottom')) { const bX = capXRange('bottom'), bZ = capZRange('bottom'); push(bX.x0, bX.x1, 0, t, bZ.z0, bZ.z1, wood, 'B'); }
+  if (capOn('top')) { const tX = capXRange('top'), tZ = capZRange('top'); push(tX.x0, tX.x1, h - t, h, tZ.z0, tZ.z1, wood, 'T'); }
   const bg = back ? backGeom() : null;
   const zF = bg ? bg.front : 0;
   if (bg) push(bg.x0, bg.x1, bg.y0, bg.y1, bg.z0, bg.z1, backCol, 'BK');
@@ -657,7 +696,8 @@ function renderDesign3D() {
     return { b, rc: corners };
   });
   const pad = 56, scale = Math.min((cw - 2 * pad) / Math.max(1, maxX - minX), (ch - 2 * pad) / Math.max(1, maxY - minY)) * S.zoom3d;
-  const offX = (cw - (maxX + minX) * scale) / 2, offY = (ch + (maxY + minY) * scale) / 2;
+  const panX = (S.pan3d && S.pan3d.x) || 0, panY = (S.pan3d && S.pan3d.y) || 0;   // screen-space drag-to-move
+  const offX = (cw - (maxX + minX) * scale) / 2 + panX, offY = (ch + (maxY + minY) * scale) / 2 + panY;
   const proj = (p) => [offX + p[0] * scale, offY - p[1] * scale];
 
   const Lv = (() => { const v = [-0.3, 0.65, 0.7], m = Math.hypot(v[0], v[1], v[2]); return v.map(k => k / m); })();
@@ -806,28 +846,44 @@ function drawModuleElevation(ctx, m, worldToScreen) {
     fillR({ x0: t, x1: w - t, y0: t, y1: h - t }, '#222831', null);
     const wall = '#6b7686', wline = '#aeb7c6';
     const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
-    fillR({ x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
-    fillR({ x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
-    fillR({ x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
-    fillR({ x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
-    for (const c of S.comps) { if (c.type === 'drawer') continue; fillR(partRect(c), '#cba03a', '#f1e4ba'); }
-    for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFronts(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, 'rgba(203,160,58,0.92)', '#f1e4ba');
+    if (sideLOn()) fillR({ x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
+    if (sideROn()) fillR({ x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
+    if (capOn('bottom')) fillR({ x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
+    if (capOn('top')) fillR({ x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
+    const Pe = woodPal();
+    for (const c of S.comps) { if (c.type === 'drawer') continue; fillR(partRect(c), Pe.p2d, Pe.e2d); }
+    for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFronts(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, Pe.p2d, Pe.e2d);
     for (const r of doorRects()) fillR({ x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y1 }, 'rgba(190,160,105,0.30)', '#d9c08a');
   });
 }
+// Modules ticked for the wall (default: all visible). roomHidden lives on the module object.
+const roomVisibleModules = () => JOB.modules.map((m, i) => ({ m, i })).filter(o => !o.m.roomHidden);
 function renderRoom() {
+  renderRoomModuleList();
   const { cw, ch } = fitCanvas(roomCanvas, rctx);
   rctx.clearRect(0, 0, cw, ch);
   if (!JOB.modules.length) return;
   ensureRunLayout();
-  const bb = roomBBox(), pad = 72;
-  const baseScale = Math.min((cw - 2 * pad) / bb.w, (ch - 2 * pad) / bb.h);
+  const vis = roomVisibleModules(), pad = 72;
+  if (!vis.length) {   // nothing ticked — just the floor line + a nudge
+    const fy = ch - pad + roomView.pan.y;
+    rctx.strokeStyle = '#5b6573'; rctx.lineWidth = 1; rctx.beginPath(); rctx.moveTo(40, fy + 0.5); rctx.lineTo(cw - 40, fy + 0.5); rctx.stroke();
+    rctx.fillStyle = '#9aa3b2'; rctx.font = '13px system-ui, sans-serif'; rctx.textAlign = 'center';
+    rctx.fillText('No modules ticked — choose which to show in the list (top-left).', cw / 2, ch / 2); rctx.textAlign = 'left';
+    lastRoomRects = []; return;
+  }
+  // Frame tightly to the VISIBLE modules; their placements never change, so ticking never nudges the others.
+  let minX = Infinity, maxX = 1, maxY = 1;
+  for (const { m } of vis) { const p = modPlace(m); minX = Math.min(minX, p.offsetX); maxX = Math.max(maxX, p.offsetX + m.cab.w); maxY = Math.max(maxY, p.baseHeight + m.cab.h); }
+  minX = Math.min(minX, maxX - 1);
+  const bbW = Math.max(1, maxX - minX), bbH = Math.max(1, maxY);
+  const baseScale = Math.min((cw - 2 * pad) / bbW, (ch - 2 * pad) / bbH);
   const scale = Math.max(0.0001, baseScale) * roomView.zoom; lastRoomScale = scale;
-  const totalW = bb.w * scale, ox = (cw - totalW) / 2 + roomView.pan.x, floorY = ch - pad + roomView.pan.y;
-  const worldToScreen = (wx, wy) => [ox + wx * scale, floorY - wy * scale];
+  const totalW = bbW * scale, ox = (cw - totalW) / 2 + roomView.pan.x, floorY = ch - pad + roomView.pan.y;
+  const worldToScreen = (wx, wy) => [ox + (wx - minX) * scale, floorY - wy * scale];
   rctx.strokeStyle = '#5b6573'; rctx.lineWidth = 1; rctx.beginPath(); rctx.moveTo(ox - 24, floorY + 0.5); rctx.lineTo(ox + totalW + 24, floorY + 0.5); rctx.stroke();
   lastRoomRects = [];
-  JOB.modules.forEach((m, i) => {
+  vis.forEach(({ m, i }) => {
     drawModuleElevation(rctx, m, worldToScreen);
     const p = modPlace(m), tl = worldToScreen(p.offsetX, p.baseHeight + m.cab.h), br = worldToScreen(p.offsetX + m.cab.w, p.baseHeight);
     const rx = tl[0], ry = tl[1], rw = br[0] - tl[0], rh = br[1] - tl[1];
@@ -840,6 +896,50 @@ function renderRoom() {
   rctx.fillStyle = '#9aa3b2'; rctx.font = '12px system-ui, sans-serif'; rctx.textAlign = 'left';
   rctx.fillText('Room · drag a cabinet to position · drag up to lift (manual stack) · click to make it active', 12, ch - 12);
 }
+// Floating list that toggles which modules appear on the wall (only shown while the Room tab is active).
+function renderRoomModuleList() {
+  const box = $('room-modules'); if (!box) return;
+  const show = roomCanvas.classList.contains('active') && JOB.modules.length > 0;
+  box.classList.toggle('hidden', !show);
+  if (!show) return;
+  $('rm-list').innerHTML = JOB.modules.map((m, i) => {
+    const on = !m.roomHidden, nm = escapeHtml(m.name || `Module ${i + 1}`);
+    return `<label class="rm-item${i === JOB.active ? ' active' : ''}"><input type="checkbox" data-mi="${i}"${on ? ' checked' : ''}><span>${nm}</span></label>`;
+  }).join('');
+}
+$('rm-list').addEventListener('change', (e) => {
+  const cb = e.target.closest('input[data-mi]'); if (!cb) return;
+  const m = JOB.modules[parseInt(cb.dataset.mi, 10)];
+  if (m) { if (cb.checked) delete m.roomHidden; else m.roomHidden = true; }
+  renderRoom();
+});
+$('rm-all').addEventListener('click', () => { JOB.modules.forEach(m => delete m.roomHidden); renderRoom(); });
+$('rm-none').addEventListener('click', () => { JOB.modules.forEach(m => m.roomHidden = true); renderRoom(); });
+// Collapse / expand (default collapsed) — click the chevron to reveal the list.
+$('rm-toggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const box = $('room-modules'), collapsed = box.classList.toggle('collapsed');
+  $('rm-toggle').setAttribute('aria-expanded', String(!collapsed));
+});
+// Draggable by its header (buttons still click through); overlay so the wall canvas is never resized.
+(function makeRoomListDraggable() {
+  const box = $('room-modules'), head = box && box.querySelector('.rm-head');
+  if (!box || !head) return;
+  let pan = null; const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+  head.addEventListener('mousedown', (e) => {
+    if (e.target.closest('button')) return;   // let the chevron / All / None work
+    const r = box.getBoundingClientRect(), pr = box.parentElement.getBoundingClientRect();
+    pan = { dx: e.clientX - r.left, dy: e.clientY - r.top }; box.classList.add('dragging'); e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!pan) return;
+    const pr = box.parentElement.getBoundingClientRect();
+    box.style.right = 'auto';
+    box.style.left = clamp(e.clientX - pr.left - pan.dx, 0, Math.max(0, pr.width - box.offsetWidth)) + 'px';
+    box.style.top = clamp(e.clientY - pr.top - pan.dy, 0, Math.max(0, pr.height - box.offsetHeight)) + 'px';
+  });
+  window.addEventListener('mouseup', () => { if (pan) { pan = null; box.classList.remove('dragging'); } });
+})();
 const roomXY = (e) => { const r = roomCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 roomCanvas.addEventListener('mousedown', (e) => {
   const { x, y } = roomXY(e); let hit = null;
@@ -897,7 +997,7 @@ function render() {
   $('zoom-ctl').classList.toggle('hidden', !designActive);
   $('explode-wrap').classList.toggle('hidden', !(designActive && S.viewMode === '3d'));
   $('dims-wrap').classList.toggle('hidden', !(designActive && S.viewMode === '3d'));
-  btnDelete.disabled = typeof S.selectedId !== 'number';
+  btnDelete.disabled = !(typeof S.selectedId === 'number' || ['T', 'B', 'L', 'R', 'BK'].includes(S.selectedId));
   renderSelectionPanel(); syncBackUI();
   const sheetActive = sheetCanvas.classList.contains('active');
   $('sheet-stats').classList.toggle('hidden', !sheetActive);
@@ -928,12 +1028,17 @@ function syncInputs() {
   inBack.checked = S.cab.back;
   inSW.value = fmt(S.sheet.w); inSH.value = fmt(S.sheet.h); inKerf.value = fmt(S.sheet.kerf);
   inGrain.checked = S.grainLock; inPreset.value = S.preset;
+  if (inWoodTheme) inWoodTheme.value = S.woodTheme || 'birch';
   inReveal.value = fmt(S.doors.reveal); inExplode.value = S.explode; inDims.checked = S.showDims;
   inBackType.value = S.backPanel.type; inBackThk.value = fmt(S.backPanel.thickness);
   inBackGroove.value = fmt(S.backPanel.groove); inBackSetback.value = fmt(S.backPanel.setback);
   const top = capOf('top'), bot = capOf('bottom');
   inTopMount.value = top.mount || 'inset'; inTopAnchor.value = top.anchor || 'back'; inTopDepth.value = fmt(capDepth('top'));
   inBotMount.value = bot.mount || 'inset'; inBotAnchor.value = bot.anchor || 'back'; inBotDepth.value = fmt(capDepth('bottom'));
+  const topOn = capOn('top'), botOn = capOn('bottom');
+  inTopOn.checked = topOn; inBotOn.checked = botOn; inSideL.checked = sideLOn(); inSideR.checked = sideROn();
+  [inTopMount, inTopDepth, inTopAnchor].forEach(el => el.disabled = !topOn);   // grey out a removed cap's props
+  [inBotMount, inBotDepth, inBotAnchor].forEach(el => el.disabled = !botOn);
   const step = unitStep(); [inW, inH, inD, inT, inSW, inSH, inBackThk, inBackGroove, inBackSetback, inTopDepth, inBotDepth].forEach(el => el.step = step);
   inKerf.step = S.unit === 'mm' ? 0.1 : 0.01; inReveal.step = S.unit === 'mm' ? 0.5 : 0.01;
   $('unit-mm').classList.toggle('active', S.unit === 'mm'); $('unit-in').classList.toggle('active', S.unit === 'in');
@@ -971,7 +1076,7 @@ function addComp(type) {
     const a0 = cell.bottom, a1 = cell.top;
     const left = { id: S._seq++, type: 'vertical', pos: cell.left + ft / 2, a0, a1, thick: ft };
     const right = { id: S._seq++, type: 'vertical', pos: cell.right - ft / 2, a0, a1, thick: ft };
-    const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount() };
+    const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount(), valign: 'top', h: 150 };   // defaults: 1 drawer, anchored to top, 150 mm tall
     clampComp(left); clampComp(right); clampComp(c);
     S.comps.push(left, right, c); S.selectedId = c.id; render(); return;
   }
@@ -986,9 +1091,20 @@ function addComp(type) {
   else { c.a0 = cell.bottom; c.a1 = cell.top; c.pos = (cell.left + cell.right) / 2; }
   clampComp(c); S.comps.push(c); S.selectedId = c.id; render();
 }
-const drawerCount = () => { const v = parseInt(($('in-drawer-count') || {}).value, 10) || 3; return Math.max(1, Math.min(12, v)); };
+const drawerCount = () => { const v = parseInt(($('in-drawer-count') || {}).value, 10) || 1; return Math.max(1, Math.min(12, v)); };
 const doorLeaves = () => (parseInt(($('in-door-leaves') || {}).value, 10) === 2 ? 2 : 1);
-function deleteSelected() { if (S.selectedId != null) { if (typeof S.selectedId === 'number') S.comps = S.comps.filter(c => c.id !== S.selectedId); S.selectedId = null; render(); } }
+function deleteSelected() {
+  const id = S.selectedId;
+  if (id == null) return;
+  if (typeof id === 'number') S.comps = S.comps.filter(c => c.id !== id);   // a component
+  else if (id === 'T') { if (S.cab.top) S.cab.top.on = false; }             // carcass panels: flag off (restore via setup toggles)
+  else if (id === 'B') { if (S.cab.bottom) S.cab.bottom.on = false; }
+  else if (id === 'L') S.cab.sideL = false;
+  else if (id === 'R') S.cab.sideR = false;
+  else if (id === 'BK') S.cab.back = false;
+  else return;   // unknown/undeletable
+  S.selectedId = null; syncInputs(); render();
+}
 
 // ---------- Selected-component editor ----------
 // Fixed carcass/door parts (selected by clicking a face in 3D) have a string id; report their size read-only.
@@ -1009,7 +1125,7 @@ function renderSelectionPanel() {
   // While the user is actively typing/selecting in this component's fields, don't rebuild them (keeps caret/focus for live edits).
   if (fields.dataset.editId === String(id) && document.activeElement && fields.contains(document.activeElement)) { card.classList.remove('hidden'); return; }
   const u = S.unit, step = unitStep();
-  $('sel-delete').classList.remove('hidden');   // shown by default; the cap/read-only branches hide it
+  $('sel-delete').classList.remove('hidden'); $('sel-update').classList.remove('hidden');   // default both visible; branches adjust
   const comp = typeof id === 'number' ? S.comps.find(c => c.id === id) : null;
   const row = (rid, label, val) => `<label class="sel-row"><span>${label}</span><input id="${rid}" type="number" step="${step}" value="${val}"></label>`;
   const sel = (v) => lastAnchor === v ? ' selected' : '';
@@ -1023,12 +1139,15 @@ function renderSelectionPanel() {
     const coverRow = comp.span
       ? `<div class="sel-ro">Region <b>picked cells</b> · <button type="button" id="sel-door-uncombine" class="linkish">use single cell</button></div>`
       : `<label class="sel-row"><span>Covers</span><select id="sel-covers">${optC('cell', 'This cell')}${optC('column', 'Full column (ignore shelves)')}${optC('row', 'Full row (ignore verticals)')}${optC('all', 'Whole interior')}</select></label>`;
+    const span = doorSpan(comp), spanH = span.top - span.bottom, off = span.bottom - base.bottom;
     fields.innerHTML =
       `<label class="sel-row"><span>Leaves</span><select id="sel-leaves"><option value="1"${two ? '' : ' selected'}>1 door</option><option value="2"${two ? ' selected' : ''}>2 doors</option></select></label>` +
       `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset (overlay)')}${optM('inset', 'Inset')}</select></label>` +
+      row('sel-h', 'Height', fmt(spanH)) +
+      row('sel-yoff', 'From bottom', fmt(off)) +
       coverRow;
     const dr = doorRectsFor(comp)[0];
-    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)} · ${mnt} front ${fmtU(dr.y1 - dr.y0)} × ${fmtU(dr.x1 - dr.x0)} · reveal ${fmtU(S.doors.reveal)} (set in Fronts / doors).`;
+    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)}. Door occupies ${fmtU(off)}–${fmtU(off + spanH)} up the column (front ${fmtU(dr.y1 - dr.y0)} × ${fmtU(dr.x1 - dr.x0)}). Set Height + From bottom to place a drawer below and this door above — no shelf needed.`;
     actions.classList.remove('hidden');
   } else if (comp && comp.type === 'drawer') {
     const cell = cellAt(comp.ax, comp.ay, null), rect = drawerRect(comp);
@@ -1037,15 +1156,17 @@ function renderSelectionPanel() {
     const opt = (v, lbl) => `<option value="${v}"${va === v ? ' selected' : ''}>${lbl}</option>`;
     const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `Drawer bank <small>(${u})</small>`;
+    const off = rect.bottom - cell.bottom;
     fields.innerHTML =
       `<label class="sel-row"><span>Drawers</span><input id="sel-count" type="number" min="1" max="12" step="1" value="${comp.count}"></label>` +
       row('sel-w', 'Width', fmt(W)) +
       row('sel-h', 'Height', fmt(H)) +
+      row('sel-yoff', 'From bottom', fmt(off)) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-valign">${opt('top', 'Top')}${opt('bottom', 'Bottom')}</select></label>` +
       row('sel-depth', 'Box depth', fmt(compDepth(comp))) +
       `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset')}${optM('inset', 'Inset')}</select></label>`;
     const ff = drawerFronts(comp)[0];
-    derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)} · ${n} ${mnt} front(s) ${fmtU(ff.x1 - ff.x0)} × ${fmtU(ff.y1 - ff.y0)} each.`;
+    derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)}. Bank occupies ${fmtU(off)}–${fmtU(off + H)} up the column · ${n} ${mnt} front(s) ${fmtU(ff.x1 - ff.x0)} × ${fmtU(ff.y1 - ff.y0)} each. From bottom stacks it under a door — no shelf.`;
     actions.classList.remove('hidden');
   } else if (comp) {
     const isShelf = comp.type === 'shelf';
@@ -1077,19 +1198,22 @@ function renderSelectionPanel() {
       `<label class="sel-row"><span>Mount</span><select id="sel-cap-mount">${optM('inset', 'Inset (between sides)')}${optM('outset', 'Outset (over sides)')}</select></label>` +
       row('sel-cap-depth', 'Depth', fmt(capDepth(which))) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-cap-anchor">${optA('back', 'Back')}${optA('center', 'Center')}${optA('front', 'Front')}</select></label>`;
-    derived.textContent = `Panel ${fmtU(capWidth(which))} × ${fmtU(capDepth(which))} · ${mnt}. Sides now ${fmtU(sideHeight())}. Depth = full ⇒ aligned to sides.`;
-    actions.classList.remove('hidden');
-    $('sel-delete').classList.add('hidden');   // structural part — no delete
+    derived.textContent = `Panel ${fmtU(capWidth(which))} × ${fmtU(capDepth(which))} · ${mnt}. Sides now ${fmtU(sideHeight())}. Depth = full ⇒ aligned to sides. Delete removes it (restore in Setup).`;
+    actions.classList.remove('hidden');   // both Update and Delete available
   } else {
     const info = carcassPartInfo(id);
     if (!info) { card.classList.add('hidden'); fields.innerHTML = ''; return; }
+    const deletable = (id === 'L' || id === 'R' || id === 'BK');   // sides + back can be removed; restore via Setup toggles
     title.innerHTML = `${info.name} <small>(${u})</small>`;
     fields.innerHTML =
       `<div class="sel-ro">Length <b>${fmtU(info.length)}</b></div>` +
       `<div class="sel-ro">Width <b>${fmtU(info.width)}</b></div>` +
       `<div class="sel-ro">Thickness <b>${fmtU(S.cab.t)}</b></div>`;
-    derived.textContent = 'Fixed part — change its size via the cabinet Sizes above.';
-    actions.classList.add('hidden');
+    derived.textContent = deletable
+      ? 'Read-only size (set via cabinet Sizes). Delete removes this panel — restore it from Setup.'
+      : 'Fixed part — change its size via the cabinet Sizes above.';
+    if (deletable) { actions.classList.remove('hidden'); $('sel-update').classList.add('hidden'); }   // Delete only
+    else actions.classList.add('hidden');
   }
   fields.dataset.editId = String(id);
   card.classList.remove('hidden');
@@ -1111,6 +1235,11 @@ function applySelectedEdit() {
     c.count = parseInt(($('sel-leaves') || {}).value, 10) === 2 ? 2 : 1;
     const cov = (($('sel-covers') || {}).value) || 'cell'; if (cov === 'cell') delete c.covers; else c.covers = cov;
     if ((($('sel-mount') || {}).value) === 'inset') c.mount = 'inset'; else delete c.mount;   // outset is the default
+    // Vertical placement: Height (store only when shorter than the opening) + From-bottom offset.
+    const ch = doorBase(c).top - doorBase(c).bottom;
+    const H = get('sel-h'); if (H > 0 && Math.abs(H - ch) > 0.5) c.h = Math.max(1, Math.min(H, ch)); else delete c.h;
+    const off = get('sel-yoff'), maxOff = ch - (c.h != null ? c.h : ch);
+    if (off > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
     render(); return;
   }
   if (c.type === 'drawer') {
@@ -1120,6 +1249,8 @@ function applySelectedEdit() {
     const W = get('sel-w'), H = get('sel-h');   // store only when smaller than the cell, so a full-cell bank keeps tracking the cell
     if (W > 0 && Math.abs(W - cw) > 0.5) c.w = Math.max(1, Math.min(W, cw)); else delete c.w;
     if (H > 0 && Math.abs(H - ch) > 0.5) c.h = Math.max(1, Math.min(H, ch)); else delete c.h;
+    const off = get('sel-yoff'), maxOff = ch - (c.h != null ? c.h : ch);   // From-bottom offset (overrides valign when set)
+    if (off > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
     const usable = usableDepth(), dep = get('sel-depth'); if (dep > 0 && Math.abs(dep - usable) > 0.5) c.depth = Math.max(1, Math.min(dep, usable)); else delete c.depth;
     if ((($('sel-mount') || {}).value) === 'inset') c.mount = 'inset'; else delete c.mount;
     render(); return;
@@ -1182,18 +1313,24 @@ function hitTest(mx, my) {
   for (let i = S.comps.length - 1; i >= 0; i--) {
     const c = S.comps[i];
     if (c.type === 'drawer') { const cl = drawerRect(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
-    if (c.type === 'door') { const cl = doorBase(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
+    if (c.type === 'door') { const cl = doorSpan(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
     const r = partRect(c); if (mx >= r.x0 - tol && mx <= r.x1 + tol && my >= r.y0 - tol && my <= r.y1 + tol) return c;
   }
-  // Carcass top/bottom rails (editable): fall through to these only if no component was hit.
-  const { h, t } = S.cab, tX = capXRange('top'), bX = capXRange('bottom');
-  if (my >= h - t - tol && my <= h + tol && mx >= tX.x0 - tol && mx <= tX.x1 + tol) return { id: 'T' };
-  if (my >= -tol && my <= t + tol && mx >= bX.x0 - tol && mx <= bX.x1 + tol) return { id: 'B' };
+  // Carcass rails (top/bottom caps + sides): fall through to these only if no component was hit.
+  const { w, h, t } = S.cab, tX = capXRange('top'), bX = capXRange('bottom'), sy0 = sideY0(), sy1 = sideY1();
+  if (capOn('top') && my >= h - t - tol && my <= h + tol && mx >= tX.x0 - tol && mx <= tX.x1 + tol) return { id: 'T' };
+  if (capOn('bottom') && my >= -tol && my <= t + tol && mx >= bX.x0 - tol && mx <= bX.x1 + tol) return { id: 'B' };
+  if (sideLOn() && mx >= -tol && mx <= t + tol && my >= sy0 - tol && my <= sy1 + tol) return { id: 'L' };
+  if (sideROn() && mx >= w - t - tol && mx <= w + tol && my >= sy0 - tol && my <= sy1 + tol) return { id: 'R' };
   return null;
 }
 let drag = null;
 designCanvas.addEventListener('mousedown', (e) => {
-  if (S.viewMode === '3d') { drag = { type: 'orbit', x: e.clientX, y: e.clientY, moved: 0 }; designCanvas.style.cursor = 'grabbing'; return; }
+  if (S.viewMode === '3d') {
+    const panIt = e.button === 1 || e.button === 2 || e.shiftKey;   // right / middle / Shift+drag pans; left-drag orbits
+    drag = { type: panIt ? 'pan3d' : 'orbit', x: e.clientX, y: e.clientY, moved: 0 };
+    designCanvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+  }
   const { mx, my } = eventToMM(e); S.lastPoint = { x: mx, y: my };
   if (cellMode) { toggleCellAt(mx, my); return; }   // pick/unpick a bay; no drag while combining cells
   const hit = hitTest(mx, my); S.selectedId = hit ? hit.id : null;
@@ -1213,6 +1350,11 @@ window.addEventListener('mousemove', (e) => {
   }
   if (drag.type === 'pan') {
     S.pan.x += e.clientX - drag.x; S.pan.y += e.clientY - drag.y;
+    drag.x = e.clientX; drag.y = e.clientY; render(); return;
+  }
+  if (drag.type === 'pan3d') {
+    S.pan3d = S.pan3d || { x: 0, y: 0 };
+    S.pan3d.x += e.clientX - drag.x; S.pan3d.y += e.clientY - drag.y;
     drag.x = e.clientX; drag.y = e.clientY; render(); return;
   }
   const { mx, my } = eventToMM(e);
@@ -1273,6 +1415,7 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   roomCanvas.classList.toggle('active', tab.dataset.tab === 'room');
   $('setup-view').classList.toggle('active', tab.dataset.tab === 'setup');
   render();
+  renderRoomModuleList();   // show the wall list when entering Room, hide it when leaving
 }));
 function setViewMode(m) { S.viewMode = m; if (m === '3d') { S.showDims = false; inDims.checked = false; if (cellMode) setCellMode(false); } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab'; render(); }
 $('v2d').addEventListener('click', () => setViewMode('2d'));
@@ -1283,7 +1426,8 @@ function zoomStep(f) {
 }
 $('zoom-in').addEventListener('click', () => zoomStep(1.2));
 $('zoom-out').addEventListener('click', () => zoomStep(1 / 1.2));
-$('zoom-fit').addEventListener('click', () => { S.zoom = 1; S.pan = { x: 0, y: 0 }; S.zoom3d = 1; render(); });
+$('zoom-fit').addEventListener('click', () => { S.zoom = 1; S.pan = { x: 0, y: 0 }; S.zoom3d = 1; S.pan3d = { x: 0, y: 0 }; render(); });
+designCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // allow right-drag to pan without the menu
 
 // ---------- Modules (Job ▸ Module switcher) ----------
 // The active module is always the global `S`; mutations land in JOB.modules[active] because
@@ -1469,7 +1613,13 @@ function readCaps() {
 }
 [inTopMount, inTopAnchor, inBotMount, inBotAnchor].forEach(el => el.addEventListener('change', readCaps));
 [inTopDepth, inBotDepth].forEach(el => el.addEventListener('input', readCaps));
+// Panel presence toggles (remove / restore). Keep the cap objects so their props survive a round-trip.
+inTopOn.addEventListener('change', () => { (S.cab.top || (S.cab.top = { mount: 'inset', depth: null, anchor: 'back' })).on = inTopOn.checked; syncInputs(); render(); });
+inBotOn.addEventListener('change', () => { (S.cab.bottom || (S.cab.bottom = { mount: 'inset', depth: null, anchor: 'back' })).on = inBotOn.checked; syncInputs(); render(); });
+inSideL.addEventListener('change', () => { S.cab.sideL = inSideL.checked; render(); });
+inSideR.addEventListener('change', () => { S.cab.sideR = inSideR.checked; render(); });
 inGrain.addEventListener('change', () => { S.grainLock = inGrain.checked; render(); });
+if (inWoodTheme) inWoodTheme.addEventListener('change', () => { S.woodTheme = inWoodTheme.value; render(); });
 inPreset.addEventListener('change', () => { S.preset = inPreset.value; if (PRESETS[S.preset]) { Object.assign(S.cab, PRESETS[S.preset]); readInputs(); syncInputs(); } });
 $('btn-add-door').addEventListener('click', () => addComp('door'));
 $('btn-door-cells').addEventListener('click', () => setCellMode(true));
@@ -1485,10 +1635,38 @@ btnDelete.addEventListener('click', deleteSelected);
 $('sel-update').addEventListener('click', applySelectedEdit);
 $('sel-delete').addEventListener('click', deleteSelected);
 $('sel-close').addEventListener('click', () => { S.selectedId = null; render(); });
+// ---------- Draggable props panel (grab the header to move it clear of the view) ----------
+(function makePropsPanelDraggable() {
+  const card = $('card-selected'), head = card && card.querySelector('.sel-head');
+  if (!card || !head) return;
+  let pan = null;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi));
+  const place = (leftPx, topPx) => {
+    const pr = card.parentElement.getBoundingClientRect();
+    card.style.right = 'auto'; card.style.bottom = 'auto';
+    card.style.left = clamp(leftPx, 0, Math.max(0, pr.width - card.offsetWidth)) + 'px';
+    card.style.top = clamp(topPx, 0, Math.max(0, pr.height - card.offsetHeight)) + 'px';
+  };
+  head.addEventListener('mousedown', (e) => {
+    if (e.target.closest('.sel-close')) return;   // don't hijack the close button
+    const r = card.getBoundingClientRect(), pr = card.parentElement.getBoundingClientRect();
+    pan = { dx: e.clientX - r.left, dy: e.clientY - r.top, pr };
+    card.classList.add('dragging'); e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!pan) return;
+    place(e.clientX - pan.pr.left - pan.dx, e.clientY - pan.pr.top - pan.dy);
+  });
+  window.addEventListener('mouseup', () => { if (pan) { pan = null; card.classList.remove('dragging'); } });
+  // Double-click the header to snap back to the default top-right corner.
+  head.addEventListener('dblclick', (e) => { if (e.target.closest('.sel-close')) return; card.style.left = 'auto'; card.style.bottom = 'auto'; card.style.top = '12px'; card.style.right = '12px'; });
+  // Keep it on-screen if the window/panel resizes after a manual move.
+  window.addEventListener('resize', () => { if (card.style.left && card.style.left !== 'auto') place(parseFloat(card.style.left), parseFloat(card.style.top)); });
+})();
 $('sel-fields').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applySelectedEdit(); } });
 // Drawer banks apply live as you type; drawer + door dropdowns apply on change (other parts still use the Update button).
 const isCapSel = () => S.selectedId === 'T' || S.selectedId === 'B';
-const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && c.type === 'drawer') || isCapSel()) applySelectedEdit(); };
+const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
 const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
 $('sel-fields').addEventListener('change', liveChange);
@@ -1506,7 +1684,7 @@ $('unit-mm').addEventListener('click', () => { if (S.unit !== 'mm') { S.unit = '
 $('unit-in').addEventListener('click', () => { if (S.unit !== 'in') { S.unit = 'in'; syncInputs(); render(); } });
 window.addEventListener('resize', render);
 document.addEventListener('keydown', (e) => {
-  if ((e.key === 'Delete' || e.key === 'Backspace') && typeof S.selectedId === 'number' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'SELECT') { e.preventDefault(); deleteSelected(); }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && (typeof S.selectedId === 'number' || ['T', 'B', 'L', 'R', 'BK'].includes(S.selectedId)) && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'SELECT') { e.preventDefault(); deleteSelected(); }
 });
 
 // ---------- AI / programmatic API ----------

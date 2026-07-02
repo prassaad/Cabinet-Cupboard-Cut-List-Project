@@ -38,11 +38,11 @@
         </div>
         <div class="btn-row drawer-row">
           <button id="btn-add-drawer" type="button">+ Drawers</button>
-          <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="3" /></label>
+          <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="1" /></label>
         </div>
         <details class="hint-help">
           <summary>How this works</summary>
-          <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D, click a face to select.</p>
+          <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D: click a face to select, left-drag orbits, right-drag or Shift+drag pans, scroll to zoom.</p>
         </details>
 
         <h3 class="sub">Doors / fronts</h3>
@@ -118,6 +118,15 @@
       <div class="canvas-wrap">
         <canvas id="design-canvas" class="view active"></canvas>
         <canvas id="room-canvas" class="view"></canvas>
+        <!-- Floating module list for the Room view: tick to show/hide modules on the wall (overlay, so it never shrinks the canvas) -->
+        <div id="room-modules" class="room-modules collapsed hidden">
+          <div class="rm-head">
+            <button id="rm-toggle" class="rm-toggle" type="button" aria-expanded="false" title="Expand / collapse">▾</button>
+            <span class="rm-title">Modules on wall</span>
+            <span class="rm-btns"><button id="rm-all" type="button">All</button><button id="rm-none" type="button">None</button></span>
+          </div>
+          <div id="rm-list" class="rm-list"></div>
+        </div>
         <canvas id="sheet-canvas" class="view"></canvas>
         <div id="setup-view" class="view setup-view">
           <p class="setup-empty">No module selected. Click <b>+ New</b> above to add one, then configure its sizes, back panel, sheet stock and banding here.</p>
@@ -139,11 +148,20 @@
                   <option value="custom">Custom</option>
                 </select>
               </label>
+              <label>Wood finish
+                <select id="in-wood-theme">
+                  <option value="birch">Birch (light)</option>
+                  <option value="oak">Oak</option>
+                  <option value="walnut">Walnut</option>
+                </select>
+              </label>
               <label>Height <input id="in-h" type="number" min="1" step="1" /></label>
               <label>Width  <input id="in-w" type="number" min="1" step="1" /></label>
               <label>Depth  <input id="in-d" type="number" min="1" step="1" /></label>
               <label>Material thickness <input id="in-t" type="number" min="1" step="1" /></label>
               <label class="checkbox"><input id="in-back" type="checkbox" checked /> Include back panel</label>
+              <label class="checkbox"><input id="in-side-l" type="checkbox" checked /> Include left side</label>
+              <label class="checkbox"><input id="in-side-r" type="checkbox" checked /> Include right side</label>
             </section>
 
             <section class="card" id="card-back">
@@ -163,6 +181,7 @@
 
             <section class="card" id="card-caps">
               <h2>Top &amp; bottom panels <small class="unit-label">(mm)</small></h2>
+              <label class="checkbox"><input id="in-top-on" type="checkbox" checked /> Include top panel</label>
               <label>Top mount
                 <select id="in-top-mount">
                   <option value="inset">Inset (between sides)</option>
@@ -177,6 +196,7 @@
                   <option value="front">Front</option>
                 </select>
               </label>
+              <label class="checkbox"><input id="in-bot-on" type="checkbox" checked /> Include bottom panel</label>
               <label>Bottom mount
                 <select id="in-bot-mount">
                   <option value="inset">Inset (between sides)</option>
