@@ -1292,8 +1292,10 @@ function renderModuleBar() {
   const bar = $('module-bar'); if (!bar) return;
   const chips = JOB.modules.map((m, i) => {
     const active = i === JOB.active, name = escapeHtml(m.name || `Module ${i + 1}`);
-    const x = active ? ` <span class="mod-x" data-del="${i}" title="Delete module">✕</span>` : '';
-    const tip = `${m.code ? `Code ${escapeHtml(m.code)} · ` : ''}Click to switch · double-click to rename`;
+    const x = active
+      ? ` <span class="mod-edit" data-edit="${i}" title="Rename module">✎</span> <span class="mod-x" data-del="${i}" title="Delete module">✕</span>`
+      : '';
+    const tip = `${m.code ? `Code ${escapeHtml(m.code)} · ` : ''}Click to switch · ✎ or double-click to rename`;
     return `<button class="mod-chip${active ? ' active' : ''}" data-mi="${i}" type="button" title="${tip}">${name}${x}</button>`;
   }).join('');
   const label = JOB.modules.length ? 'Modules' : 'No modules';
@@ -1314,16 +1316,32 @@ function addModule(name, code) {
   if (code && code.trim()) m.code = code.trim();
   JOB.modules.push(m); switchTo(JOB.modules.length - 1);
 }
-// Small panel to name a module on creation (code stored, name shown in the list).
-function openAddModulePanel() {
+// The code+name panel is shared for creating and renaming: moduleEditIndex null = add, number = rename that module.
+let moduleEditIndex = null;
+function openModulePanel(editIndex) {
   const panel = $('module-add-panel'); if (!panel) return;
+  moduleEditIndex = editIndex;
+  const editing = editIndex != null;
+  const m = editing ? JOB.modules[editIndex] : null;
   const next = (JOB._mseq || JOB.modules.length) + 1;
-  $('mod-code').value = ''; $('mod-name').value = `Module ${next}`;
+  $('map-title').textContent = editing ? 'Rename module' : 'New module';
+  $('mod-add-confirm').textContent = editing ? 'Save' : 'Add';
+  $('mod-code').value = editing ? (m.code || '') : '';
+  $('mod-name').value = editing ? (m.name || `Module ${editIndex + 1}`) : `Module ${next}`;
   panel.classList.remove('hidden');
   $('mod-name').focus(); $('mod-name').select();
 }
-function closeAddModulePanel() { const p = $('module-add-panel'); if (p) p.classList.add('hidden'); }
-function confirmAddModule() { addModule($('mod-name').value, $('mod-code').value); closeAddModulePanel(); }
+const openAddModulePanel = () => openModulePanel(null);
+function closeAddModulePanel() { const p = $('module-add-panel'); if (p) p.classList.add('hidden'); moduleEditIndex = null; }
+function confirmAddModule() {
+  const name = $('mod-name').value, code = $('mod-code').value;
+  if (moduleEditIndex != null) {   // rename mode: update name + code in place, keep the module selected
+    const m = JOB.modules[moduleEditIndex];
+    if (m) { m.name = name.trim() || m.name || `Module ${moduleEditIndex + 1}`; const cd = code.trim(); if (cd) m.code = cd; else delete m.code; }
+    closeAddModulePanel(); renderModuleBar(); return;
+  }
+  addModule(name, code); closeAddModulePanel();
+}
 function deleteModule(i) {
   if (i < 0 || i >= JOB.modules.length) return;
   if (!confirm(`Delete "${JOB.modules[i].name || `Module ${i + 1}`}"? This cannot be undone.`)) return;
@@ -1337,14 +1355,8 @@ function deleteModule(i) {
   if (cellMode) setCellMode(false);
   S.selectedId = null; normalizeComps(); renderModuleBar(); syncInputs(); render();
 }
-function renameModule(i) {
-  if (i < 0 || i >= JOB.modules.length) return;
-  const cur = JOB.modules[i].name || `Module ${i + 1}`;
-  let name = null;
-  try { name = prompt('Module name', cur); } catch { return; }   // prompt() is unavailable in some shells (e.g. Electron)
-  if (name == null) return;
-  JOB.modules[i].name = name.trim() || cur; renderModuleBar();
-}
+// Rename opens the shared inline panel (no browser prompt — friendlier and works in Electron).
+function renameModule(i) { if (i >= 0 && i < JOB.modules.length) openModulePanel(i); }
 
 // ---------- Persistence ----------
 const STORE_KEY = 'cabinet-cutlist-prototype';   // legacy single-module save (read once for migration)
@@ -1625,6 +1637,8 @@ window.Cabinet = {
 $('module-bar').addEventListener('click', (e) => {
   const del = e.target.closest('.mod-x');
   if (del) { e.stopPropagation(); deleteModule(parseInt(del.dataset.del, 10)); return; }
+  const edit = e.target.closest('.mod-edit');
+  if (edit) { e.stopPropagation(); renameModule(parseInt(edit.dataset.edit, 10)); return; }
   if (e.target.closest('#mod-add')) { openAddModulePanel(); return; }
   const chip = e.target.closest('.mod-chip');
   if (chip) switchTo(parseInt(chip.dataset.mi, 10));
