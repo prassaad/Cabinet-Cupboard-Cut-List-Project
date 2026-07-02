@@ -17,16 +17,17 @@ const PART_TYPES = [
 ];
 const EDGES = ['L1', 'L2', 'W1', 'W2'];   // L edges run along length, W edges along width
 
+// Edge banding is OFF by default for every part (user unchecks by default for now). The per-part
+// keys are kept so the banding toggles — and later auto-banding — have a place to write into.
 const defaultBand = () => ({
-  Side: { L1: true }, TopBottom: { L1: true }, Shelf: { L1: true }, Vertical: { L1: true },
-  Door: { L1: true, L2: true, W1: true, W2: true }, Back: {},
+  Side: {}, TopBottom: {}, Shelf: {}, Vertical: {}, Door: {}, Back: {},
 });
 
 const DEFAULTS = () => ({
   unit: 'mm',
   preset: 'custom',
   cab: { w: 1200, h: 2400, d: 580, t: 20, back: true },
-  backPanel: { type: 'groove', thickness: 6, groove: 8, setback: 12 },   // type: groove | rabbet | overlay
+  backPanel: { type: 'groove', thickness: 6, groove: 6, setback: 19 },   // type: groove | rabbet | overlay. setback 19 + thickness 6 => shelf/vertical depth = d - 25 (e.g. 580 -> 555)
   comps: [],                 // {id,type:'shelf'|'vertical',pos, a0,a1}  span: shelf=x-range, vertical=y-range
   doors: { reveal: 2 },   // reveal is the global gap; door fronts are now cell-bound components
   sheet: { w: 2440, h: 1220, kerf: 3.2 },
@@ -148,18 +149,35 @@ const verticalSegments = (c) =>
 
 // ---------- Doors (cell-bound component, like drawers) ----------
 // A door component fills the cell at its anchor with 1 or 2 leaves (count), separated by the reveal gap.
-// Mount mirrors drawers: 'inset' sits flush within the opening; 'outset' (overlay, the default) grows by
-// t/2 onto each surrounding member so it covers the carcass edges. Either way the reveal gap is removed.
+// Mount mirrors drawers, but the two mounts size very differently:
+//  - 'outset' (overlay, the default): the door covers the carcass edge-to-edge with NO deduction on any
+//    side that meets the cabinet exterior — so a single full door equals the cabinet's outer face
+//    (e.g. w x h). Where the door edge lands on an interior divider instead, it overlays half the divider
+//    and gives back half the reveal so neighbouring overlay doors leave a `reveal` gap between them.
+//  - 'inset': the door fits inside the opening with the reveal gap deducted on every side.
 const doorMount = (c) => (c.mount === 'inset' ? 'inset' : 'outset');
 // The opening a door fills: an explicit multi-cell `span` (built by picking cells) if present,
 // otherwise the cell at its anchor expanded per its Covers mode. Shape: {left,right,bottom,top}.
 const doorBase = (c) => c.span ? c.span : cellAt(c.ax, c.ay, null, doorCoverOpts(c));
 function doorRectsFor(c) {
-  const g = S.doors.reveal, t = S.cab.t, mount = doorMount(c);
+  const g = S.doors.reveal, t = S.cab.t, { w, h } = S.cab, mount = doorMount(c);
   const cell = doorBase(c);
-  const half = (mount === 'inset' ? 0 : t) / 2;   // overlay extends half the material onto each side
-  const x0 = cell.left - half + g / 2, x1 = cell.right + half - g / 2;
-  const y0 = cell.bottom - half + g / 2, y1 = cell.top + half - g / 2;
+  let x0, x1, y0, y1;
+  if (mount === 'inset') {
+    // Inset: fit inside the opening, reveal deducted on all four sides.
+    x0 = cell.left + g / 2; x1 = cell.right - g / 2;
+    y0 = cell.bottom + g / 2; y1 = cell.top - g / 2;
+  } else {
+    // Overlay: NO deductions. Reach the carcass outer face on exterior sides, and the divider
+    // centerline on interior sides (so the door overlays half the divider). Two overlay doors that
+    // share a divider meet at the centerline — a reveal gap between separate doors is a later add-on.
+    // eps tolerates float drift.
+    const eps = 0.5;
+    x0 = (Math.abs(cell.left   - t)       < eps) ? 0 : cell.left   - t / 2;
+    x1 = (Math.abs(cell.right  - (w - t)) < eps) ? w : cell.right  + t / 2;
+    y0 = (Math.abs(cell.bottom - t)       < eps) ? 0 : cell.bottom - t / 2;
+    y1 = (Math.abs(cell.top    - (h - t)) < eps) ? h : cell.top    + t / 2;
+  }
   if ((c.count | 0) === 2) { const mid = (x0 + x1) / 2; return [{ x0, x1: mid - g / 2, y0, y1, id: c.id, side: 'L', mount }, { x0: mid + g / 2, x1, y0, y1, id: c.id, side: 'R', mount }]; }
   return [{ x0, x1, y0, y1, id: c.id, side: '1', mount }];
 }
@@ -818,14 +836,14 @@ function renderEmptyJob() {
   renderModuleBar();
   lastRoomRects = [];
   document.querySelector('#cutlist tbody').innerHTML = '';
-  $('cutlist-summary').innerHTML = 'No modules in this job. Click <b>+ Module</b> to add one.';
+  $('cutlist-summary').innerHTML = 'No modules in this job. Click <b>+ New</b> to add one.';
   $('card-selected').classList.add('hidden');
   btnDelete.disabled = true;
   ['view-toggle', 'zoom-ctl', 'explode-wrap', 'dims-wrap', 'sheet-stats'].forEach(id => $(id).classList.add('hidden'));
   const drawMsg = (canvas, ctx) => {
     const { cw, ch } = fitCanvas(canvas, ctx); ctx.clearRect(0, 0, cw, ch);
     ctx.fillStyle = '#9aa3b2'; ctx.font = '15px system-ui, sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('No modules — click “+ Module” to add one', cw / 2, ch / 2); ctx.textAlign = 'left';
+    ctx.fillText('No modules — click “+ New” to add one', cw / 2, ch / 2); ctx.textAlign = 'left';
   };
   if (designCanvas.classList.contains('active')) drawMsg(designCanvas, dctx);
   if (roomCanvas.classList.contains('active')) drawMsg(roomCanvas, rctx);
@@ -1209,7 +1227,7 @@ function renderModuleBar() {
     return `<button class="mod-chip${active ? ' active' : ''}" data-mi="${i}" type="button" title="${tip}">${name}${x}</button>`;
   }).join('');
   const label = JOB.modules.length ? 'Modules' : 'No modules';
-  bar.innerHTML = `<span class="mod-label">${label}</span>${chips}<button id="mod-add" class="mod-add" type="button" title="Add a module to this job">+ Module</button>`;
+  bar.innerHTML = `<span class="mod-label">${label}</span>${chips}<button id="mod-add" class="mod-add" type="button" title="Add a module to this job"><span class="mod-add-ico" aria-hidden="true">+</span>New</button>`;
 }
 function switchTo(i) {
   if (i < 0 || i >= JOB.modules.length) return;

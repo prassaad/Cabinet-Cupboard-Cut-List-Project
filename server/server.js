@@ -33,7 +33,11 @@ const server = http.createServer((req, res) => {
   if (!file.startsWith(ROOT)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'content-type': MIME[path.extname(file)] || 'application/octet-stream',
+      // Dev server: never let the browser cache the app, so code edits always show on reload.
+      'cache-control': 'no-store, no-cache, must-revalidate',
+    });
     res.end(data);
   });
 });
