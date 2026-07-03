@@ -130,6 +130,7 @@ body.no-modules .setup-empty { display: block; }
 .sel-row span { color: var(--muted); }
 .sel-ro { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--muted); }
 .sel-ro b { color: var(--ink); font-weight: 600; }
+.sel-sub { margin: 4px 0 6px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
 #sel-actions.hidden { display: none; }
 
 .center { display: flex; flex-direction: column; min-width: 0; }

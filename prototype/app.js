@@ -143,6 +143,14 @@ const sideROn = () => S.cab.sideR !== false;
 const sideY0 = () => (capOn('bottom') && capOutset('bottom')) ? S.cab.t : 0;
 const sideY1 = () => (capOn('top') && capOutset('top')) ? S.cab.h - S.cab.t : S.cab.h;
 const sideHeight = () => Math.max(1, sideY1() - sideY0());
+// Interior envelope. Verticals/openings run the SIDE height (inset top/bottom caps don't shorten them) —
+// or the full cabinet envelope when no side exists. Left/right follows the sides: between them when present,
+// out to the edge when a side is removed. So a new vertical always matches the side height.
+const anySide = () => sideLOn() || sideROn();
+const innerL = () => sideLOn() ? S.cab.t : 0;
+const innerR = () => sideROn() ? S.cab.w - S.cab.t : S.cab.w;
+const innerB = () => anySide() ? sideY0() : 0;
+const innerT = () => anySide() ? sideY1() : S.cab.h;
 
 // ---------- Geometry: cells, spans, segments ----------
 function normalizeComps() {
@@ -150,7 +158,7 @@ function normalizeComps() {
   for (const c of S.comps) {
     if (c.type === 'drawer' || c.type === 'door') continue;
     if (c.a0 == null || c.a1 == null) {
-      if (c.type === 'shelf') { c.a0 = t; c.a1 = w - t; } else { c.a0 = t; c.a1 = h - t; }
+      if (c.type === 'shelf') { c.a0 = innerL(); c.a1 = innerR(); } else { c.a0 = innerB(); c.a1 = innerT(); }
     }
   }
 }
@@ -162,7 +170,7 @@ const partThick = (c) => (c && c.thick != null) ? Math.max(1, c.thick) : S.cab.t
 function cellAt(px, py, excludeId, opts) {
   const { w, h, t } = S.cab;
   const ignoreShelves = !!(opts && opts.ignoreShelves), ignoreVerticals = !!(opts && opts.ignoreVerticals);
-  let left = t, right = w - t, bottom = t, top = h - t;
+  let left = innerL(), right = innerR(), bottom = innerB(), top = innerT();   // panel-aware: reaches the edge where a panel was removed
   for (const c of S.comps) {
     if (c.id === excludeId) continue;
     const ht = partThick(c) / 2;
@@ -224,11 +232,11 @@ function doorRectsFor(c) {
     // centerline on interior sides (so the door overlays half the divider). An open edge from partial
     // sizing (freeTop/freeBottom) instead gets a reveal gap, so a stacked drawer + door sit flush.
     // eps tolerates float drift.
-    const eps = 0.5;
-    x0 = (Math.abs(cell.left   - t)       < eps) ? 0 : cell.left   - t / 2;
-    x1 = (Math.abs(cell.right  - (w - t)) < eps) ? w : cell.right  + t / 2;
-    y0 = cell.freeBottom ? cell.bottom + g / 2 : ((Math.abs(cell.bottom - t)       < eps) ? 0 : cell.bottom - t / 2);
-    y1 = cell.freeTop    ? cell.top    - g / 2 : ((Math.abs(cell.top    - (h - t)) < eps) ? h : cell.top    + t / 2);
+    const eps = 0.5;   // a cell edge at (or beyond) the carcass line reaches the outer face; an interior divider overlays half
+    x0 = (cell.left   <= t + eps)     ? 0 : cell.left   - t / 2;
+    x1 = (cell.right  >= w - t - eps) ? w : cell.right  + t / 2;
+    y0 = cell.freeBottom ? cell.bottom + g / 2 : ((cell.bottom <= t + eps)     ? 0 : cell.bottom - t / 2);
+    y1 = cell.freeTop    ? cell.top    - g / 2 : ((cell.top    >= h - t - eps) ? h : cell.top    + t / 2);
   }
   if ((c.count | 0) === 2) { const mid = (x0 + x1) / 2; return [{ x0, x1: mid - g / 2, y0, y1, id: c.id, side: 'L', mount }, { x0: mid + g / 2, x1, y0, y1, id: c.id, side: 'R', mount }]; }
   return [{ x0, x1, y0, y1, id: c.id, side: '1', mount }];
@@ -252,10 +260,18 @@ function drawerRect(c) {
   else bottom = (c.valign || 'bottom') === 'top' ? cell.top - H : cell.bottom;
   return { left, right: left + W, bottom, top: bottom + H };
 }
+// Per-side reveal gaps around each drawer front (Left/Right/Top/Bottom). Each defaults to half the global
+// reveal so untouched drawers look the same; the drawer editor can override any side to fit the view.
+const drawerGaps = (c) => ({
+  l: c.gapL != null ? Math.max(0, c.gapL) : DRAWER.gap / 2,
+  r: c.gapR != null ? Math.max(0, c.gapR) : DRAWER.gap / 2,
+  t: c.gapT != null ? Math.max(0, c.gapT) : DRAWER.gap / 2,
+  b: c.gapB != null ? Math.max(0, c.gapB) : DRAWER.gap / 2,
+});
 // The drawer fronts (one rect per stacked front). Inset fronts sit within the opening with a reveal gap;
 // outset (overlay) fronts grow by the overlay (t/2 onto each surrounding member) so they cover the carcass edges.
 function drawerFronts(c) {
-  const t = S.cab.t, cell = drawerRect(c), full = cellAt(c.ax, c.ay, null), g = DRAWER.gap, n = Math.max(1, c.count | 0);
+  const t = S.cab.t, cell = drawerRect(c), full = cellAt(c.ax, c.ay, null), n = Math.max(1, c.count | 0), gp = drawerGaps(c);
   const ov = c.mount === 'inset' ? 0 : t, half = ov / 2;
   const x0 = cell.left - half, x1 = cell.right + half;
   // Overlay overhangs half the material onto surrounding carcass, but an OPEN edge (partial bank stacked
@@ -264,7 +280,12 @@ function drawerFronts(c) {
   const yHi = (cell.top < full.top - 0.5) ? cell.top : cell.top + half;
   const fband = (yHi - yLo) / n;
   const fronts = [];
-  for (let i = 0; i < n; i++) fronts.push({ x0: x0 + g / 2, x1: x1 - g / 2, y0: yLo + i * fband + g / 2, y1: yLo + (i + 1) * fband - g / 2 });
+  for (let i = 0; i < n; i++) {   // clamp so a big gap can't invert the front (fit the view)
+    let fx0 = x0 + gp.l, fx1 = x1 - gp.r; if (fx1 - fx0 < 1) { const m = (x0 + x1) / 2; fx0 = m - 0.5; fx1 = m + 0.5; }
+    const bandLo = yLo + i * fband, bandHi = yLo + (i + 1) * fband;
+    let fy0 = bandLo + gp.b, fy1 = bandHi - gp.t; if (fy1 - fy0 < 1) { const m = (bandLo + bandHi) / 2; fy0 = m - 0.5; fy1 = m + 0.5; }
+    fronts.push({ x0: fx0, x1: fx1, y0: fy0, y1: fy1 });
+  }
   return fronts;
 }
 function drawerParts(c) {
@@ -530,7 +551,7 @@ function vDim(ctx, y0mm, y1mm, xmm, sdir, valMM) {   // sdir +1 = arrow right of
 // Unique opening cells (gaps bounded by parts), used by both 2D and 3D dimensioning.
 function enumerateOpenings() {
   const { w, h, t } = S.cab;
-  const xs = new Set([t, w - t]), ys = new Set([t, h - t]);
+  const xs = new Set([innerL(), innerR()]), ys = new Set([innerB(), innerT()]);
   for (const c of S.comps) {
     const ht = partThick(c) / 2;
     if (c.type === 'vertical') { xs.add(c.pos - ht); xs.add(c.pos + ht); }
@@ -584,7 +605,7 @@ function renderDesign() {
   computeView(cw, ch);
   const { w, h, t } = S.cab;
 
-  fillRectMM(dctx, { x0: t, x1: w - t, y0: t, y1: h - t }, '#222831', null);
+  fillRectMM(dctx, { x0: innerL(), x1: innerR(), y0: innerB(), y1: innerT() }, '#222831', null);
   const wall = '#6b7686', wline = '#aeb7c6';
   const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
   if (sideLOn()) fillRectMM(dctx, { x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
@@ -843,7 +864,7 @@ function drawModuleElevation(ctx, m, worldToScreen) {
   const tf = (xmm, ymm) => worldToScreen(p.offsetX + xmm, p.baseHeight + ymm);
   withModule(m, () => {
     const { w, h, t } = S.cab, fillR = (r, f, s) => fillRectWorld(ctx, r, f, s, tf);
-    fillR({ x0: t, x1: w - t, y0: t, y1: h - t }, '#222831', null);
+    fillR({ x0: innerL(), x1: innerR(), y0: innerB(), y1: innerT() }, '#222831', null);
     const wall = '#6b7686', wline = '#aeb7c6';
     const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
     if (sideLOn()) fillR({ x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
@@ -1060,7 +1081,7 @@ function readInputs() {
   S.sheet.kerf = Math.max(0, toMM(parseFloat(inKerf.value) || 0));
   // caps are loosely coupled — their depth may exceed the cabinet depth, so no clamping here
   // keep spans inside the (possibly resized) carcass
-  for (const c of S.comps) { if (c.type === 'shelf' || c.type === 'vertical') { const lim = c.type === 'shelf' ? S.cab.w - S.cab.t : S.cab.h - S.cab.t; c.a0 = Math.max(S.cab.t, Math.min(c.a0, lim)); c.a1 = Math.max(c.a0, Math.min(c.a1, lim)); } if (c.depth != null) c.depth = Math.min(c.depth, S.cab.d); if (c.setback != null) c.setback = Math.min(c.setback, S.cab.d); clampComp(c); }
+  for (const c of S.comps) { if (c.type === 'shelf' || c.type === 'vertical') { const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT(); c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi)); } if (c.depth != null) c.depth = Math.min(c.depth, S.cab.d); if (c.setback != null) c.setback = Math.min(c.setback, S.cab.d); clampComp(c); }
   render();
 }
 
@@ -1117,7 +1138,8 @@ function carcassPartInfo(id) {
   if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? { name: 'Door', length: r.y1 - r.y0, width: r.x1 - r.x0 } : null; }
   return null;
 }
-let lastAnchor = 'center';   // resize anchor for the single Length/Height field
+let lastAnchor = 'center';    // resize anchor for the span field (shelf Length / vertical Height)
+let lastVAnchor = 'center';   // position anchor for the pos field (shelf Height / vertical Position): which face the value refers to
 function renderSelectionPanel() {
   const card = $('card-selected'), fields = $('sel-fields'), derived = $('sel-derived'), actions = $('sel-actions'), title = $('sel-title');
   const id = S.selectedId;
@@ -1156,7 +1178,7 @@ function renderSelectionPanel() {
     const opt = (v, lbl) => `<option value="${v}"${va === v ? ' selected' : ''}>${lbl}</option>`;
     const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `Drawer bank <small>(${u})</small>`;
-    const off = rect.bottom - cell.bottom;
+    const off = rect.bottom - cell.bottom, gp = drawerGaps(comp);
     fields.innerHTML =
       `<label class="sel-row"><span>Drawers</span><input id="sel-count" type="number" min="1" max="12" step="1" value="${comp.count}"></label>` +
       row('sel-w', 'Width', fmt(W)) +
@@ -1164,23 +1186,35 @@ function renderSelectionPanel() {
       row('sel-yoff', 'From bottom', fmt(off)) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-valign">${opt('top', 'Top')}${opt('bottom', 'Bottom')}</select></label>` +
       row('sel-depth', 'Box depth', fmt(compDepth(comp))) +
-      `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset')}${optM('inset', 'Inset')}</select></label>`;
+      `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset')}${optM('inset', 'Inset')}</select></label>` +
+      `<div class="sel-sub">Front gap (mm)</div>` +
+      row('sel-gap-l', 'Left', fmt(gp.l)) +
+      row('sel-gap-r', 'Right', fmt(gp.r)) +
+      row('sel-gap-t', 'Top', fmt(gp.t)) +
+      row('sel-gap-b', 'Bottom', fmt(gp.b));
     const ff = drawerFronts(comp)[0];
     derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)}. Bank occupies ${fmtU(off)}–${fmtU(off + H)} up the column · ${n} ${mnt} front(s) ${fmtU(ff.x1 - ff.x0)} × ${fmtU(ff.y1 - ff.y0)} each. From bottom stacks it under a door — no shelf.`;
     actions.classList.remove('hidden');
   } else if (comp) {
     const isShelf = comp.type === 'shelf';
+    const selV = (v) => lastVAnchor === v ? ' selected' : '';
+    // The position value refers to the anchored face: end = top/right (pos + ht), start = bottom/left (pos - ht), center = middle.
+    const htp = partThick(comp) / 2, voff = lastVAnchor === 'end' ? htp : lastVAnchor === 'start' ? -htp : 0;
     title.innerHTML = `${isShelf ? 'Shelf' : 'Vertical'} <small>(${u})</small>`;
     fields.innerHTML =
-      row('sel-pos', isShelf ? 'Height' : 'Position', fmt(comp.pos)) +
+      row('sel-pos', isShelf ? 'Height' : 'Position', fmt(comp.pos + voff)) +
+      `<label class="sel-row"><span>${isShelf ? 'Height anchor' : 'Position anchor'}</span><select id="sel-vanchor">` +
+        `<option value="start"${selV('start')}>${isShelf ? 'Bottom' : 'Left'}</option>` +
+        `<option value="center"${selV('center')}>Middle</option>` +
+        `<option value="end"${selV('end')}>${isShelf ? 'Top' : 'Right'}</option></select></label>` +
       row('sel-len', isShelf ? 'Length' : 'Height', fmt(comp.a1 - comp.a0)) +
+      `<label class="sel-row"><span>${isShelf ? 'Length anchor' : 'Height anchor'}</span><select id="sel-anchor">` +
+        `<option value="start"${sel('start')}>${isShelf ? 'Left' : 'Bottom'}</option>` +
+        `<option value="center"${sel('center')}>${isShelf ? 'Center' : 'Middle'}</option>` +
+        `<option value="end"${sel('end')}>${isShelf ? 'Right' : 'Top'}</option></select></label>` +
       row('sel-thick', isShelf ? 'Thickness' : 'Width', fmt(partThick(comp))) +
       row('sel-depth', 'Depth', fmt(compDepth(comp))) +
-      row('sel-setback', 'Setback from back', fmt(comp.setback || 0)) +
-      `<label class="sel-row"><span>Anchor</span><select id="sel-anchor">` +
-        `<option value="start"${sel('start')}>${isShelf ? 'Left' : 'Bottom'}</option>` +
-        `<option value="center"${sel('center')}>Center</option>` +
-        `<option value="end"${sel('end')}>${isShelf ? 'Right' : 'Top'}</option></select></label>`;
+      row('sel-setback', 'Setback from back', fmt(comp.setback || 0));
     const segs = isShelf ? shelfSegments(comp) : verticalSegments(comp), usable = usableDepth();
     derived.textContent =
       (segs.length > 1 ? `Cut into ${segs.length} pieces · ` : '') +
@@ -1253,9 +1287,12 @@ function applySelectedEdit() {
     if (off > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
     const usable = usableDepth(), dep = get('sel-depth'); if (dep > 0 && Math.abs(dep - usable) > 0.5) c.depth = Math.max(1, Math.min(dep, usable)); else delete c.depth;
     if ((($('sel-mount') || {}).value) === 'inset') c.mount = 'inset'; else delete c.mount;
+    // Per-side front gaps (dummy reveal) — recalculates the front size, cut list, 2D and 3D.
+    c.gapL = Math.max(0, get('sel-gap-l')); c.gapR = Math.max(0, get('sel-gap-r'));
+    c.gapT = Math.max(0, get('sel-gap-t')); c.gapB = Math.max(0, get('sel-gap-b'));
     render(); return;
   }
-  const { w, h, t } = S.cab, max = c.type === 'shelf' ? w - t : h - t;
+  const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
   // Resize from Length + Anchor, measured against the component's current span.
   const anchor = ($('sel-anchor') || {}).value || lastAnchor; lastAnchor = anchor;
   let len = get('sel-len'); if (!(len > 0)) len = c.a1 - c.a0;
@@ -1263,9 +1300,13 @@ function applySelectedEdit() {
   if (anchor === 'start') { a0 = c.a0; a1 = a0 + len; }            // left/bottom edge stays
   else if (anchor === 'end') { a1 = c.a1; a0 = a1 - len; }         // right/top edge stays
   else { const ctr = (c.a0 + c.a1) / 2; a0 = ctr - len / 2; a1 = ctr + len / 2; }   // midpoint stays
-  a0 = Math.max(t, Math.min(a0, max - 1));
-  a1 = Math.max(a0 + 1, Math.min(a1, max));
-  c.a0 = a0; c.a1 = a1; c.pos = get('sel-pos');
+  a0 = Math.max(lo, Math.min(a0, hi - 1));
+  a1 = Math.max(a0 + 1, Math.min(a1, hi));
+  c.a0 = a0; c.a1 = a1;
+  // Position from the anchored face: Height/Position value refers to top/right (end), bottom/left (start) or middle (center).
+  const vanchor = ($('sel-vanchor') || {}).value || lastVAnchor; lastVAnchor = vanchor;
+  const htp = partThick(c) / 2, voff = vanchor === 'end' ? htp : vanchor === 'start' ? -htp : 0;
+  c.pos = get('sel-pos') - voff;
   // Panel thickness (e.g. a 25 mm flank): store an override only when it differs from the cabinet default.
   const thk = get('sel-thick');
   if (thk > 0 && Math.abs(thk - S.cab.t) > 0.5) c.thick = Math.max(1, thk); else delete c.thick;
@@ -1670,6 +1711,15 @@ const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.
 const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
 $('sel-fields').addEventListener('change', liveChange);
+// Changing a shelf/vertical position anchor re-reads the field to the current face, so an unchanged number never moves the part.
+$('sel-fields').addEventListener('change', (e) => {
+  if (e.target.id !== 'sel-vanchor') return;
+  const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null;
+  if (!c || (c.type !== 'shelf' && c.type !== 'vertical')) return;
+  const a = e.target.value; lastVAnchor = a;
+  const ht = partThick(c) / 2, off = a === 'end' ? ht : a === 'start' ? -ht : 0;
+  const el = $('sel-pos'); if (el) el.value = fmt(c.pos + off);
+});
 $('sel-fields').addEventListener('click', (e) => {
   if (e.target.id !== 'sel-door-uncombine') return;
   const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null;
@@ -1718,14 +1768,14 @@ function aiSetDoors(count, reveal) {
   syncInputs(); render();
 }
 function aiAddShelves(count, fromMM, toMM) {
-  const { w, h, t } = S.cab, a0 = fromMM != null ? fromMM : t, a1 = toMM != null ? toMM : w - t;
-  const lo = t, hi = h - t, n = Math.max(1, Math.min(50, count | 0));
+  const a0 = fromMM != null ? fromMM : innerL(), a1 = toMM != null ? toMM : innerR();
+  const lo = innerB(), hi = innerT(), n = Math.max(1, Math.min(50, count | 0));
   for (let k = 1; k <= n; k++) S.comps.push({ id: S._seq++, type: 'shelf', a0, a1, pos: lo + (hi - lo) * k / (n + 1) });
   S.selectedId = null; render(); return { ok: true, added: n };
 }
 function aiAddVerticals(count, fromMM, toMM) {
-  const { w, h, t } = S.cab, a0 = fromMM != null ? fromMM : t, a1 = toMM != null ? toMM : h - t;
-  const lo = t, hi = w - t, n = Math.max(1, Math.min(50, count | 0));
+  const a0 = fromMM != null ? fromMM : innerB(), a1 = toMM != null ? toMM : innerT();
+  const lo = innerL(), hi = innerR(), n = Math.max(1, Math.min(50, count | 0));
   for (let k = 1; k <= n; k++) S.comps.push({ id: S._seq++, type: 'vertical', a0, a1, pos: lo + (hi - lo) * k / (n + 1) });
   S.selectedId = null; render(); return { ok: true, added: n };
 }
