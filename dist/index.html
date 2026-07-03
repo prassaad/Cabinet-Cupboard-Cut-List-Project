@@ -83,11 +83,11 @@
       <div class="tabs">
         <button class="tab active" data-tab="design" type="button">Design</button>
         <button class="tab" data-tab="room" type="button">Room</button>
-        <button class="tab" data-tab="sheet" type="button">Sheet layout</button>
+        <button class="tab" data-tab="sheet" type="button">Sheet</button>
         <button class="tab" data-tab="setup" type="button">Setup</button>
         <div class="zoom-ctl hidden" id="zoom-ctl" role="group" aria-label="Zoom">
           <button id="zoom-out" type="button" title="Zoom out">−</button>
-          <button id="zoom-fit" type="button" title="Fit to view">Fit</button>
+          <button id="zoom-fit" type="button" title="Fit to view (click to reset)">Fit</button>
           <button id="zoom-in" type="button" title="Zoom in">+</button>
         </div>
         <div class="view-toggle" id="view-toggle" role="group" aria-label="View">
@@ -105,12 +105,21 @@
             </svg>
           </button>
         </div>
-        <label class="explode hidden" id="explode-wrap">Explode <input id="in-explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
-        <label class="explode hidden" id="dims-wrap">Dimensions <span class="switch"><input id="in-dims" type="checkbox" checked /><span class="slider"></span></span></label>
+        <button id="btn-measure" class="measure-btn hidden" type="button" title="Measure: click two points (snaps to corners)">📏 Measure</button>
+        <label class="explode hidden" id="explode-wrap" title="Explode view"><span class="explode-ico" aria-hidden="true">⤢</span><input id="in-explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
+        <label class="explode hidden" id="dims-wrap" title="Show dimensions">Dim <span class="switch"><input id="in-dims" type="checkbox" checked /><span class="slider"></span></span></label>
       </div>
       <div class="canvas-wrap">
         <canvas id="design-canvas" class="view active"></canvas>
         <canvas id="room-canvas" class="view"></canvas>
+        <!-- Room view: switch between flat elevation and a composed 3D scene -->
+        <div id="room-view-toggle" class="room-view-toggle hidden" role="group" aria-label="Room view mode">
+          <button id="rv-2d" class="active" type="button">Elevation</button>
+          <button id="rv-3d" type="button">3D</button>
+          <span class="rv-sep"></span>
+          <button id="rv-measure" type="button" title="Click two points to measure">📏 Measure</button>
+          <button id="rv-dims" type="button" title="Show per-module dimensions">Dims</button>
+        </div>
         <!-- Floating module list for the Room view: tick to show/hide modules on the wall (overlay, so it never shrinks the canvas) -->
         <div id="room-modules" class="room-modules collapsed hidden">
           <div class="rm-head">

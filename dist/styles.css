@@ -148,8 +148,8 @@ body.no-modules .setup-empty { display: block; }
 .cut-scope button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; cursor: pointer; font-size: 12px; }
 .cut-scope button.active { background: var(--accent); color: #2a1d02; font-weight: 600; }
 
-.tabs { display: flex; gap: 4px; margin-bottom: 8px; }
-.tab { background: transparent; color: var(--muted); border: 1px solid transparent; }
+.tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; row-gap: 6px; margin-bottom: 8px; }
+.tab { background: transparent; color: var(--muted); border: 1px solid transparent; white-space: nowrap; }
 .tab.active { color: var(--ink); border-color: var(--line); background: var(--card); }
 
 .view-toggle { margin-left: auto; display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
@@ -162,11 +162,14 @@ body.no-modules .setup-empty { display: block; }
 .zoom-ctl button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; cursor: pointer; font: inherit; line-height: 1; }
 .zoom-ctl button:hover { color: var(--ink); background: #ffffff14; }
 .zoom-ctl button + button { border-left: 1px solid var(--line); }
+.zoom-ctl #zoom-fit { min-width: 46px; text-align: center; }
 .zoom-ctl.hidden { display: none; }
 
-.explode { display: flex; align-items: center; gap: 6px; color: var(--muted); margin-left: 10px; font-size: 12px; }
+.explode { display: flex; align-items: center; gap: 6px; color: var(--muted); margin-left: 10px; font-size: 12px; white-space: nowrap; }
 .explode.hidden { display: none; }
-.explode input[type="range"] { width: 90px; }
+.explode input[type="range"] { width: 64px; }
+.explode-ico { font-size: 14px; line-height: 1; opacity: .8; }
+.measure-btn { margin-left: 8px; padding: 4px 9px; }
 
 /* small toggle switch */
 .switch { position: relative; display: inline-block; width: 30px; height: 16px; }
@@ -221,6 +224,16 @@ canvas.view.active { display: block; }
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
 }
 .room-modules.hidden { display: none; }
+/* Room view Elevation/3D toggle (overlay, bottom-left of the wall canvas) */
+.room-view-toggle { position: absolute; left: 12px; bottom: 12px; z-index: 6; display: inline-flex; gap: 2px; padding: 3px; background: rgba(47, 52, 61, 0.72); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; }
+.room-view-toggle.hidden { display: none; }
+.room-view-toggle button { background: transparent; border: none; color: var(--muted); font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: pointer; }
+.room-view-toggle button.active { background: var(--accent); color: #2a1d02; font-weight: 600; }
+.room-view-toggle .rv-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: rgba(255, 255, 255, 0.14); }
+.measure-btn { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+.measure-btn.hidden { display: none; }
+.measure-btn:hover { color: var(--ink); border-color: var(--accent); }
+.measure-btn.active { background: var(--accent); color: #2a1d02; font-weight: 600; border-color: var(--accent); }
 .room-modules.collapsed { width: auto; overflow: visible; }
 .room-modules.collapsed .rm-list, .room-modules.collapsed .rm-btns { display: none; }
 .room-modules.collapsed .rm-head { margin-bottom: 0; }

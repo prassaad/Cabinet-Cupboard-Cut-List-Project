@@ -478,6 +478,90 @@ function nest(items) {
   return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH };
 }
 
+// ---------- Scale bar (adaptive ruler) ----------
+// Draws a bottom-right ruler whose length is a round 1/2/5 value in the current unit, sized to the view's
+// px-per-mm. Lets you gauge any component by eye and shows the active UOM. In 3D (orthographic) it's a
+// close approximation along the view axes.
+function drawScaleBar(ctx, cw, ch, pxPerMm) {
+  if (!(pxPerMm > 0) || !isFinite(pxPerMm)) return;
+  const mmPerDisp = S.unit === 'mm' ? 1 : MM_PER_IN, pxPerDisp = pxPerMm * mmPerDisp;
+  const targetPx = Math.max(56, Math.min(140, cw * 0.2));
+  const rawDisp = targetPx / pxPerDisp;
+  if (!(rawDisp > 0) || !isFinite(rawDisp)) return;
+  const pow = Math.pow(10, Math.floor(Math.log10(rawDisp)));
+  let niceDisp = pow; for (const m of [1, 2, 5, 10]) if (m * pow <= rawDisp) niceDisp = m * pow;
+  const barPx = niceDisp * pxPerDisp, x1 = cw - 16, x0 = x1 - barPx, y = ch - 16;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(174,183,198,0.9)'; ctx.fillStyle = 'rgba(174,183,198,0.95)';
+  ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+  ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x0, y - 5); ctx.lineTo(x0, y + 5); ctx.moveTo(x1, y - 5); ctx.lineTo(x1, y + 5); ctx.stroke();
+  ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  const lbl = S.unit === 'mm' ? `${niceDisp} mm` : `${+niceDisp.toFixed(3)} in`;
+  ctx.fillText(lbl, (x0 + x1) / 2, y - 7);
+  ctx.restore();
+}
+
+// ---------- Measure + dimension overlays ----------
+// Click-to-measure: points are stored in screen space; distance = screen length ÷ view px-per-mm (exact in
+// 2D, close in orthographic 3D). Cleared whenever the view is panned/zoomed/orbited so it never goes stale.
+// Snap a screen point to the nearest candidate (module/part corner or edge midpoint) within `tol` px.
+function nearestSnap(p, pts, tol) {
+  let best = p, bd = (tol || 12) * (tol || 12), snapped = false;
+  for (const s of pts) { const dx = s.x - p.x, dy = s.y - p.y, d = dx * dx + dy * dy; if (d < bd) { bd = d; best = s; snapped = true; } }
+  return { x: best.x, y: best.y, snapped };
+}
+// Generic measure overlay: draws the two points, the connecting line and the distance chip on any ctx.
+function drawMeasureOverlay(ctx, measure) {
+  if (!measure) return;
+  const { a, b, dist } = measure;
+  ctx.save();
+  const dot = (p) => { ctx.beginPath(); ctx.arc(p.x, p.y, 3.5, 0, 7); ctx.fillStyle = '#ffb454'; ctx.fill(); if (p.snapped) { ctx.beginPath(); ctx.arc(p.x, p.y, 6.5, 0, 7); ctx.strokeStyle = '#ffd9a0'; ctx.lineWidth = 1.5; ctx.stroke(); } };
+  ctx.strokeStyle = '#ffb454'; ctx.lineWidth = 1.5;
+  dot(a);
+  if (b) {
+    ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); dot(b);
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, txt = fmtU(dist);
+    ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const wpx = ctx.measureText(txt).width;
+    ctx.fillStyle = 'rgba(20,24,30,0.85)'; ctx.fillRect(mx - wpx / 2 - 6, my - 9, wpx + 12, 18);
+    ctx.fillStyle = '#ffd9a0'; ctx.fillText(txt, mx, my);
+  } else {
+    ctx.fillStyle = '#9aa3b2'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.fillText('Click the second point…', a.x + 8, a.y - 8);
+  }
+  ctx.restore();
+}
+// Add a screen point to a measure state, snapping to `pts` and freezing the distance once both points exist.
+function addMeasurePoint(measure, rawPt, pts, pxPerMm) {
+  const p = nearestSnap(rawPt, pts, 12);
+  if (!measure || measure.b) return { a: p };
+  const sc = pxPerMm || 1;
+  return { a: measure.a, b: p, dist: Math.hypot(p.x - measure.a.x, p.y - measure.a.y) / sc };
+}
+// A dimension line between two screen points with end ticks + a labelled chip.
+function dimLineScreen(x0, y0, x1, y1, text) {
+  rctx.save();
+  rctx.strokeStyle = DIMCOL; rctx.lineWidth = 1;
+  const dx = x1 - x0, dy = y1 - y0, L = Math.hypot(dx, dy) || 1, nx = -dy / L * 4, ny = dx / L * 4;
+  rctx.beginPath(); rctx.moveTo(x0, y0); rctx.lineTo(x1, y1);
+  rctx.moveTo(x0 - nx, y0 - ny); rctx.lineTo(x0 + nx, y0 + ny);
+  rctx.moveTo(x1 - nx, y1 - ny); rctx.lineTo(x1 + nx, y1 + ny); rctx.stroke();
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  rctx.font = '11px system-ui, sans-serif'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle';
+  const wpx = rctx.measureText(text).width;
+  rctx.fillStyle = 'rgba(20,24,30,0.8)'; rctx.fillRect(mx - wpx / 2 - 4, my - 8, wpx + 8, 15);
+  rctx.fillStyle = '#aeb7c6'; rctx.fillText(text, mx, my);
+  rctx.restore();
+}
+// Room 2D: per-module width (below) + height (right) callouts, offset in screen space so zoom keeps them tidy.
+function drawModuleDims2D(m, worldToScreen) {
+  const p = modPlace(m);
+  const bl = worldToScreen(p.offsetX, p.baseHeight), br = worldToScreen(p.offsetX + m.cab.w, p.baseHeight);
+  const tr = worldToScreen(p.offsetX + m.cab.w, p.baseHeight + m.cab.h);
+  dimLineScreen(bl[0], bl[1] + 22, br[0], br[1] + 22, fmtU(m.cab.w));
+  dimLineScreen(br[0] + 22, br[1], tr[0] + 22, tr[1], fmtU(m.cab.h));
+}
+
 // ---------- 2D design view ----------
 function partRect(c) {
   const ht = partThick(c) / 2;
@@ -667,6 +751,12 @@ function renderDesign() {
   dctx.save(); dctx.translate(view.ox - 30, sy(h / 2)); dctx.rotate(-Math.PI / 2);
   dctx.fillText(`H ${fmtU(h)}`, 0, 0); dctx.restore();
   dctx.textAlign = 'left'; dctx.fillText(`depth ${fmtU(S.cab.d)}`, 12, ch - 12);
+  dSnapPts = [];   // carcass + part corners for measure snapping
+  const addSnap = (xmm, ymm) => dSnapPts.push({ x: sx(xmm), y: sy(ymm) });
+  [[0, 0], [w, 0], [0, h], [w, h], [w / 2, 0], [w / 2, h], [0, h / 2], [w, h / 2]].forEach(([X, Y]) => addSnap(X, Y));
+  for (const c of S.comps) { const r = partRect(c); [[r.x0, r.y0], [r.x1, r.y0], [r.x0, r.y1], [r.x1, r.y1]].forEach(([X, Y]) => addSnap(X, Y)); }
+  drawScaleBar(dctx, cw, ch, view.scale);
+  drawMeasureOverlay(dctx, dMeasure);
 }
 
 // ---------- 3D preview ----------
@@ -736,6 +826,8 @@ function renderDesign3D() {
   const panX = (S.pan3d && S.pan3d.x) || 0, panY = (S.pan3d && S.pan3d.y) || 0;   // screen-space drag-to-move
   const offX = (cw - (maxX + minX) * scale) / 2 + panX, offY = (ch + (maxY + minY) * scale) / 2 + panY;
   const proj = (p) => [offX + p[0] * scale, offY - p[1] * scale];
+  lastDesign3dScale = scale;
+  dSnapPts = []; for (const { rc } of boxes) for (const c of rc) { const s = proj(c); dSnapPts.push({ x: s[0], y: s[1] }); }   // box corners for measure snapping
 
   const Lv = (() => { const v = [-0.3, 0.65, 0.7], m = Math.hypot(v[0], v[1], v[2]); return v.map(k => k / m); })();
   const faces = [];
@@ -789,6 +881,8 @@ function renderDesign3D() {
 
   dctx.fillStyle = '#9aa3b2'; dctx.font = '12px system-ui, sans-serif'; dctx.textAlign = 'left';
   dctx.fillText(`3D · drag to orbit · click a face to select · ${fmtU(w)} × ${fmtU(h)} × ${fmtU(d)}`, 12, ch - 12);
+  drawScaleBar(dctx, cw, ch, scale);
+  drawMeasureOverlay(dctx, dMeasure);
 }
 
 // ---------- Sheet view ----------
@@ -855,6 +949,105 @@ function renderSheet(pack) {
 // Composes every module side-by-side on one floor line (front elevation). Each module carries
 // placement {offsetX, baseHeight}; baseHeight is set manually (drag up) so users stack as they like.
 let lastRoomRects = [], lastRoomScale = 1, roomView = { zoom: 1, pan: { x: 0, y: 0 } }, roomDrag = null;
+let roomMode = '2d';   // Room view: '2d' front elevation | '3d' composed scene
+let roomCam = { yaw: -0.6, pitch: 0.42 }, roomZoom3d = 1, roomPan3d = { x: 0, y: 0 };
+let measureMode = false, roomMeasure = null, lastRoom3dScale = 1, roomDimsOn = false, roomSnapPts = [];   // click-to-measure + per-module dim callouts
+let dMeasureMode = false, dMeasure = null, dSnapPts = [], lastDesign3dScale = 1;   // measure tool for the main Design 2D/3D view
+// Shared 3D painter: projects a list of {x0,x1,y0,y1,z0,z1,base,alpha,id} boxes through one camera and draws
+// them back-to-front. Returns the projected faces (for optional hit-testing). Used by the Room 3D view.
+const FACES3D = [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [1, 2, 6, 5], [0, 3, 7, 4]];
+function paint3D(ctx, boxes3d, cen, cam, zoom, pan, cw, ch, selId) {
+  const { yaw, pitch } = cam;
+  const cY = Math.cos(yaw), sYa = Math.sin(yaw), cX = Math.cos(pitch), sXa = Math.sin(pitch);
+  const rot = (x, y, z) => { x -= cen[0]; y -= cen[1]; z -= cen[2]; const x1 = x * cY + z * sYa, z1 = -x * sYa + z * cY, y1 = y; return [x1, y1 * cX - z1 * sXa, y1 * sXa + z1 * cX]; };
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const mapped = boxes3d.map(b => {
+    const corners = [
+      [b.x0, b.y0, b.z0], [b.x1, b.y0, b.z0], [b.x1, b.y1, b.z0], [b.x0, b.y1, b.z0],
+      [b.x0, b.y0, b.z1], [b.x1, b.y0, b.z1], [b.x1, b.y1, b.z1], [b.x0, b.y1, b.z1],
+    ].map(c => rot(c[0], c[1], c[2]));
+    corners.forEach(p => { if (p[0] < minX) minX = p[0]; if (p[0] > maxX) maxX = p[0]; if (p[1] < minY) minY = p[1]; if (p[1] > maxY) maxY = p[1]; });
+    return { b, rc: corners };
+  });
+  const pad = 60, scale = Math.min((cw - 2 * pad) / Math.max(1, maxX - minX), (ch - 2 * pad) / Math.max(1, maxY - minY)) * zoom;
+  const offX = (cw - (maxX + minX) * scale) / 2 + (pan.x || 0), offY = (ch + (maxY + minY) * scale) / 2 + (pan.y || 0);
+  const proj = (p) => [offX + p[0] * scale, offY - p[1] * scale];
+  const Lv = (() => { const v = [-0.3, 0.65, 0.7], m = Math.hypot(v[0], v[1], v[2]); return v.map(k => k / m); })();
+  const faces = [];
+  for (const { b, rc } of mapped) {
+    const base = (selId != null && b.id === selId) ? [255, 180, 84] : b.base;
+    for (const f of FACES3D) {
+      const p0 = rc[f[0]], p1 = rc[f[1]], p2 = rc[f[2]];
+      const u = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], v = [p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]];
+      let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+      const nm = Math.hypot(n[0], n[1], n[2]) || 1; n = n.map(k => k / nm);
+      const sh = 0.42 + 0.58 * Math.abs(n[0] * Lv[0] + n[1] * Lv[1] + n[2] * Lv[2]);
+      const depth = (rc[f[0]][2] + rc[f[1]][2] + rc[f[2]][2] + rc[f[3]][2]) / 4;
+      const rgb = base.map(k => Math.round(k * sh));
+      faces.push({ pts: f.map(i => proj(rc[i])), depth, id: b.id, color: b.alpha < 1 ? `rgba(${rgb.join(',')},${b.alpha})` : `rgb(${rgb.join(',')})` });
+    }
+  }
+  faces.sort((a, b) => a.depth - b.depth);
+  for (const fc of faces) {
+    ctx.beginPath(); ctx.moveTo(fc.pts[0][0], fc.pts[0][1]);
+    for (let i = 1; i < fc.pts.length; i++) ctx.lineTo(fc.pts[i][0], fc.pts[i][1]);
+    ctx.closePath(); ctx.fillStyle = fc.color; ctx.fill();
+    ctx.strokeStyle = 'rgba(18,22,28,0.5)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+  return { faces, scale, proj, rot };
+}
+// Every visible module's boxes, translated to its place on the wall (offsetX along X, baseHeight up Y).
+function composeRoomBoxes() {
+  const out = [];
+  for (const { m } of roomVisibleModules()) {
+    const p = modPlace(m);
+    withModule(m, () => {
+      for (const b of buildBoxes()) out.push({
+        x0: b.x0 + p.offsetX, x1: b.x1 + p.offsetX, y0: b.y0 + p.baseHeight, y1: b.y1 + p.baseHeight,
+        z0: b.z0, z1: b.z1, base: b.base, alpha: b.alpha, id: null,
+      });
+    });
+  }
+  return out;
+}
+function renderRoom3D() {
+  const { cw, ch } = fitCanvas(roomCanvas, rctx);
+  rctx.clearRect(0, 0, cw, ch);
+  lastRoomRects = [];
+  const boxes = JOB.modules.length ? composeRoomBoxes() : [];
+  if (!boxes.length) {
+    rctx.fillStyle = '#9aa3b2'; rctx.font = '13px system-ui, sans-serif'; rctx.textAlign = 'center';
+    rctx.fillText(JOB.modules.length ? 'No modules ticked — choose which to show in the list.' : 'No modules yet.', cw / 2, ch / 2);
+    rctx.textAlign = 'left'; return;
+  }
+  let bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity, bz0 = Infinity, bz1 = -Infinity;
+  for (const b of boxes) { bx0 = Math.min(bx0, b.x0); bx1 = Math.max(bx1, b.x1); by0 = Math.min(by0, b.y0); by1 = Math.max(by1, b.y1); bz0 = Math.min(bz0, b.z0); bz1 = Math.max(bz1, b.z1); }
+  const span = Math.max(bx1 - bx0, by1 - by0, bz1 - bz0);
+  const floor = { x0: bx0 - span * 0.06, x1: bx1 + span * 0.06, y0: by0 - Math.max(8, span * 0.012), y1: by0, z0: bz0 - span * 0.15, z1: bz1 + span * 0.06, base: [64, 70, 80], alpha: 1, id: 'floor' };
+  const cen = [(bx0 + bx1) / 2, (by0 + by1) / 2, (bz0 + bz1) / 2];
+  const r3 = paint3D(rctx, [floor, ...boxes], cen, roomCam, roomZoom3d, roomPan3d, cw, ch, null);
+  lastRoom3dScale = r3.scale;
+  roomSnapPts = [];   // projected box corners of each module, for measure snapping
+  for (const { m } of roomVisibleModules()) {
+    const p = modPlace(m);
+    for (const X of [p.offsetX, p.offsetX + m.cab.w]) for (const Y of [p.baseHeight, p.baseHeight + m.cab.h]) for (const Z of [0, m.cab.d]) {
+      const a = r3.proj(r3.rot(X, Y, Z)); roomSnapPts.push({ x: a[0], y: a[1] });
+    }
+  }
+  if (roomDimsOn) {   // W×H×D callout floating above each module
+    rctx.font = '11px system-ui, sans-serif'; rctx.textAlign = 'center'; rctx.textBaseline = 'middle';
+    for (const { m } of roomVisibleModules()) {
+      const p = modPlace(m), a = r3.proj(r3.rot(p.offsetX + m.cab.w / 2, p.baseHeight + m.cab.h, m.cab.d));
+      const txt = `${fmt(m.cab.w)}×${fmt(m.cab.h)}×${fmt(m.cab.d)}`, wpx = rctx.measureText(txt).width;
+      rctx.fillStyle = 'rgba(20,24,30,0.82)'; rctx.fillRect(a[0] - wpx / 2 - 5, a[1] - 22, wpx + 10, 16);
+      rctx.fillStyle = '#aeb7c6'; rctx.fillText(txt, a[0], a[1] - 14);
+    }
+  }
+  rctx.fillStyle = '#9aa3b2'; rctx.font = '12px system-ui, sans-serif'; rctx.textAlign = 'left';
+  rctx.fillText('Room 3D · drag to orbit · right/Shift-drag to pan · scroll to zoom', 12, ch - 12);
+  drawScaleBar(rctx, cw, ch, r3.scale);
+  drawMeasureOverlay(rctx, roomMeasure);
+}
 function modPlace(m) { if (!m.placement) m.placement = { offsetX: 0, baseHeight: 0 }; return m.placement; }
 function ensureRunLayout() {   // give any module without a placement the next slot to the right, on the floor
   let cursor = 0;
@@ -897,6 +1090,7 @@ function drawModuleElevation(ctx, m, worldToScreen) {
 const roomVisibleModules = () => JOB.modules.map((m, i) => ({ m, i })).filter(o => !o.m.roomHidden);
 function renderRoom() {
   renderRoomModuleList();
+  if (roomMode === '3d') { renderRoom3D(); return; }
   const { cw, ch } = fitCanvas(roomCanvas, rctx);
   rctx.clearRect(0, 0, cw, ch);
   if (!JOB.modules.length) return;
@@ -932,11 +1126,20 @@ function renderRoom() {
   });
   rctx.fillStyle = '#9aa3b2'; rctx.font = '12px system-ui, sans-serif'; rctx.textAlign = 'left';
   rctx.fillText('Room · drag a cabinet to position · drag up to lift (manual stack) · click to make it active', 12, ch - 12);
+  roomSnapPts = [];   // corners + edge midpoints of each module, for measure snapping
+  for (const r of lastRoomRects) roomSnapPts.push(
+    { x: r.x, y: r.y }, { x: r.x + r.w, y: r.y }, { x: r.x, y: r.y + r.h }, { x: r.x + r.w, y: r.y + r.h },
+    { x: r.x + r.w / 2, y: r.y }, { x: r.x + r.w / 2, y: r.y + r.h }, { x: r.x, y: r.y + r.h / 2 }, { x: r.x + r.w, y: r.y + r.h / 2 });
+  if (roomDimsOn) vis.forEach(({ m }) => drawModuleDims2D(m, worldToScreen));
+  drawScaleBar(rctx, cw, ch, lastRoomScale);
+  drawMeasureOverlay(rctx, roomMeasure);
 }
 // Floating list that toggles which modules appear on the wall (only shown while the Room tab is active).
 function renderRoomModuleList() {
   const box = $('room-modules'); if (!box) return;
-  const show = roomCanvas.classList.contains('active') && JOB.modules.length > 0;
+  const roomActive = roomCanvas.classList.contains('active');
+  const tgl = $('room-view-toggle'); if (tgl) tgl.classList.toggle('hidden', !(roomActive && JOB.modules.length > 0));
+  const show = roomActive && JOB.modules.length > 0;
   box.classList.toggle('hidden', !show);
   if (!show) return;
   $('rm-list').innerHTML = JOB.modules.map((m, i) => {
@@ -979,6 +1182,16 @@ $('rm-toggle').addEventListener('click', (e) => {
 })();
 const roomXY = (e) => { const r = roomCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 roomCanvas.addEventListener('mousedown', (e) => {
+  if (measureMode) {   // click point A then B (snapped to corners); a third click starts over
+    roomMeasure = addMeasurePoint(roomMeasure, roomXY(e), roomSnapPts, roomMode === '3d' ? lastRoom3dScale : lastRoomScale);
+    renderRoom(); return;
+  }
+  roomMeasure = null;   // navigating clears a stale measurement
+  if (roomMode === '3d') {   // orbit (left) / pan (right, middle, Shift) the composed scene
+    const panIt = e.button === 1 || e.button === 2 || e.shiftKey;
+    roomDrag = { type: panIt ? 'rpan3d' : 'rorbit', x: e.clientX, y: e.clientY };
+    roomCanvas.style.cursor = 'grabbing'; e.preventDefault(); return;
+  }
   const { x, y } = roomXY(e); let hit = null;
   for (let i = lastRoomRects.length - 1; i >= 0; i--) { const r = lastRoomRects[i]; if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) { hit = r; break; } }
   if (hit) roomDrag = { type: 'module', mi: hit.i, sx: e.clientX, sy: e.clientY, start: { ...modPlace(JOB.modules[hit.i]) }, moved: 0 };
@@ -987,6 +1200,8 @@ roomCanvas.addEventListener('mousedown', (e) => {
 });
 window.addEventListener('mousemove', (e) => {
   if (!roomDrag) return;
+  if (roomDrag.type === 'rorbit') { roomCam.yaw += (e.clientX - roomDrag.x) * 0.01; roomCam.pitch = Math.max(-1.45, Math.min(1.45, roomCam.pitch + (e.clientY - roomDrag.y) * 0.01)); roomDrag.x = e.clientX; roomDrag.y = e.clientY; renderRoom(); return; }
+  if (roomDrag.type === 'rpan3d') { roomPan3d.x += e.clientX - roomDrag.x; roomPan3d.y += e.clientY - roomDrag.y; roomDrag.x = e.clientX; roomDrag.y = e.clientY; renderRoom(); return; }
   if (roomDrag.type === 'pan') { roomView.pan.x += e.clientX - roomDrag.x; roomView.pan.y += e.clientY - roomDrag.y; roomDrag.x = e.clientX; roomDrag.y = e.clientY; renderRoom(); return; }
   const dx = (e.clientX - roomDrag.sx) / lastRoomScale, dUp = -(e.clientY - roomDrag.sy) / lastRoomScale;
   roomDrag.moved += Math.abs(e.clientX - roomDrag.sx) + Math.abs(e.clientY - roomDrag.sy);
@@ -1000,7 +1215,22 @@ window.addEventListener('mouseup', () => {
   if (roomDrag.type === 'module' && roomDrag.moved < 5 && roomDrag.mi !== JOB.active) switchTo(roomDrag.mi);
   roomDrag = null; roomCanvas.style.cursor = 'grab';
 });
-roomCanvas.addEventListener('wheel', (e) => { e.preventDefault(); const f = e.deltaY < 0 ? 1.12 : 1 / 1.12; roomView.zoom = Math.max(0.3, Math.min(6, roomView.zoom * f)); renderRoom(); }, { passive: false });
+roomCanvas.addEventListener('wheel', (e) => { e.preventDefault(); roomMeasure = null; const f = e.deltaY < 0 ? 1.12 : 1 / 1.12; if (roomMode === '3d') roomZoom3d = Math.max(0.3, Math.min(6, roomZoom3d * f)); else roomView.zoom = Math.max(0.3, Math.min(6, roomView.zoom * f)); renderRoom(); }, { passive: false });
+roomCanvas.addEventListener('contextmenu', (e) => e.preventDefault());   // right-drag pans in 3D without the menu
+function setRoomMode(m) {
+  roomMode = m === '3d' ? '3d' : '2d';
+  $('rv-2d').classList.toggle('active', roomMode === '2d');
+  $('rv-3d').classList.toggle('active', roomMode === '3d');
+  roomMeasure = null; roomCanvas.style.cursor = measureMode ? 'crosshair' : 'grab'; renderRoom();
+}
+$('rv-2d').addEventListener('click', () => setRoomMode('2d'));
+$('rv-3d').addEventListener('click', () => setRoomMode('3d'));
+$('rv-measure').addEventListener('click', () => {
+  measureMode = !measureMode; roomMeasure = null;
+  $('rv-measure').classList.toggle('active', measureMode);
+  roomCanvas.style.cursor = measureMode ? 'crosshair' : 'grab'; renderRoom();
+});
+$('rv-dims').addEventListener('click', () => { roomDimsOn = !roomDimsOn; $('rv-dims').classList.toggle('active', roomDimsOn); renderRoom(); });
 
 // ---------- Master render ----------
 // Empty job (all modules deleted): clear everything and prompt to add one.
@@ -1032,6 +1262,8 @@ function render() {
   if (roomCanvas.classList.contains('active')) renderRoom();
   $('view-toggle').classList.toggle('hidden', !designActive);
   $('zoom-ctl').classList.toggle('hidden', !designActive);
+  $('btn-measure').classList.toggle('hidden', !designActive);
+  if (designActive) { const zp = Math.round((S.viewMode === '3d' ? S.zoom3d : S.zoom) * 100); const zf = $('zoom-fit'); if (zf) zf.textContent = zp === 100 ? 'Fit' : zp + '%'; }
   $('explode-wrap').classList.toggle('hidden', !(designActive && S.viewMode === '3d'));
   $('dims-wrap').classList.toggle('hidden', !(designActive && S.viewMode === '3d'));
   btnDelete.disabled = !(typeof S.selectedId === 'number' || ['T', 'B', 'L', 'R', 'BK'].includes(S.selectedId));
@@ -1385,6 +1617,11 @@ function hitTest(mx, my) {
 }
 let drag = null;
 designCanvas.addEventListener('mousedown', (e) => {
+  if (dMeasureMode) {   // click point A then B (snapped to corners); a third click starts over
+    dMeasure = addMeasurePoint(dMeasure, canvasXY(e), dSnapPts, S.viewMode === '3d' ? lastDesign3dScale : view.scale);
+    render(); return;
+  }
+  dMeasure = null;   // any interaction clears a stale measurement
   if (S.viewMode === '3d') {
     const panIt = e.button === 1 || e.button === 2 || e.shiftKey;   // right / middle / Shift+drag pans; left-drag orbits
     drag = { type: panIt ? 'pan3d' : 'orbit', x: e.clientX, y: e.clientY, moved: 0 };
@@ -1425,7 +1662,7 @@ window.addEventListener('mousemove', (e) => {
   clampComp(drag.comp); render();
 });
 designCanvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
+  e.preventDefault(); dMeasure = null;
   const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
   if (S.viewMode === '3d') { S.zoom3d = Math.max(0.3, Math.min(6, S.zoom3d * factor)); render(); return; }
   const { x, y } = canvasXY(e); zoom2DAt(x, y, factor);
@@ -1476,9 +1713,14 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   render();
   renderRoomModuleList();   // show the wall list when entering Room, hide it when leaving
 }));
-function setViewMode(m) { S.viewMode = m; if (m === '3d') { S.showDims = false; inDims.checked = false; if (cellMode) setCellMode(false); } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab'; render(); }
+function setViewMode(m) { S.viewMode = m; dMeasure = null; if (m === '3d') { S.showDims = false; inDims.checked = false; if (cellMode) setCellMode(false); } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab'; render(); }
 $('v2d').addEventListener('click', () => setViewMode('2d'));
 $('v3d').addEventListener('click', () => setViewMode('3d'));
+$('btn-measure').addEventListener('click', () => {
+  dMeasureMode = !dMeasureMode; dMeasure = null;
+  $('btn-measure').classList.toggle('active', dMeasureMode);
+  designCanvas.style.cursor = dMeasureMode ? 'crosshair' : 'grab'; render();
+});
 function zoomStep(f) {
   if (S.viewMode === '3d') { S.zoom3d = Math.max(0.3, Math.min(6, S.zoom3d * f)); render(); }
   else { const r = designCanvas.getBoundingClientRect(); zoom2DAt(r.width / 2, r.height / 2, f); }
