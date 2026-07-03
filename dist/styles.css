@@ -93,6 +93,7 @@ select {
 .drawer-row .qty { display: flex; align-items: center; gap: 6px; color: var(--muted); margin: 0; }
 .drawer-row .qty input { width: 52px; }
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
+.muted { color: var(--muted); }
 /* Collapsible help — collapsed by default; user clicks the summary to reveal the hint. */
 .hint-help { margin: 10px 0 0; }
 .hint-help > summary { color: var(--muted); font-size: 12px; cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; user-select: none; }

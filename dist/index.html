@@ -218,7 +218,23 @@
 
             <section class="card">
               <h2>Edge banding <small>L=length · W=width edges</small></h2>
+              <label>Tape thickness
+                <select id="in-tape-th">
+                  <option value="0.8">0.8 mm</option>
+                  <option value="1.3">1.3 mm</option>
+                  <option value="2">2 mm</option>
+                </select>
+              </label>
+              <label>Tape width
+                <select id="in-tape-wd">
+                  <option value="25">25 mm</option>
+                  <option value="30">30 mm</option>
+                  <option value="40">40 mm</option>
+                  <option value="45">45 mm</option>
+                </select>
+              </label>
               <div id="band-grid" class="band-grid"></div>
+              <p class="hint">Tick the edges to band per part. Thickness is subtracted from the raw cut size on those edges (finished size fills the opening); width is the roll to buy — keep it ≥ the material thickness so it covers the edge.</p>
             </section>
           </div>
         </div>

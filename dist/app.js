@@ -37,6 +37,7 @@ const DEFAULTS = () => ({
   sheet: { w: 2440, h: 1220, kerf: 3.2 },
   grainLock: false,
   band: defaultBand(),
+  edgeTape: { thickness: 0.8, width: 25 },   // tape thickness (subtracted from cut size on banded edges) + roll width (must cover the board thickness)
   viewMode: '2d',
   cam: { yaw: -0.65, pitch: 0.5 },
   explode: 0,
@@ -81,6 +82,7 @@ const inTopMount = $('in-top-mount'), inTopDepth = $('in-top-depth'), inTopAncho
 const inBotMount = $('in-bot-mount'), inBotDepth = $('in-bot-depth'), inBotAnchor = $('in-bot-anchor');
 const inTopOn = $('in-top-on'), inBotOn = $('in-bot-on'), inSideL = $('in-side-l'), inSideR = $('in-side-r');
 const inWoodTheme = $('in-wood-theme');
+const inTapeTh = $('in-tape-th'), inTapeWd = $('in-tape-wd');
 const designCanvas = $('design-canvas'), sheetCanvas = $('sheet-canvas'), roomCanvas = $('room-canvas');
 const dctx = designCanvas.getContext('2d');
 const sctx = sheetCanvas.getContext('2d');
@@ -100,6 +102,16 @@ const bandNotation = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); re
 const bandLen = (key, length, width) =>
   (edgeOn(key, 'L1') ? length : 0) + (edgeOn(key, 'L2') ? length : 0) +
   (edgeOn(key, 'W1') ? width : 0) + (edgeOn(key, 'W2') ? width : 0);
+// Edge-tape spec (selectable). Thickness is subtracted from the raw cut size on each banded edge; width is
+// the roll width (should be >= the board thickness so it covers the edge).
+const EDGE_THICKS = [0.8, 1.3, 2], EDGE_WIDTHS = [25, 30, 40, 45];
+const tapeTh = () => (S.edgeTape && +S.edgeTape.thickness) || 0;
+const tapeWd = () => (S.edgeTape && +S.edgeTape.width) || 0;
+// W1/W2 sit at the length ends → reduce LENGTH; L1/L2 run along the length at the width ends → reduce WIDTH.
+const bandLenReduce = (key) => (edgeOn(key, 'W1') ? tapeTh() : 0) + (edgeOn(key, 'W2') ? tapeTh() : 0);
+const bandWidthReduce = (key) => (edgeOn(key, 'L1') ? tapeTh() : 0) + (edgeOn(key, 'L2') ? tapeTh() : 0);
+// One-line banding summary for the selected-part panel (empty when nothing is banded on that part type).
+const bandInfo = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return on.length ? ` · Edge tape ${on.join(',')} · ${fmt(tapeTh())}×${fmt(tapeWd())} mm (cut = finished − tape)` : ''; };
 
 // Back panel geometry derived from the configurable fixing type.
 //  - overlay : full-size panel on the rear (length w × height h), front face at z = thickness
@@ -313,7 +325,11 @@ function drawerParts(c) {
 function cutListInstances() {
   const { w, h, d, t, back } = S.cab;
   const items = [];
-  const add = (name, key, length, width, srcId) => items.push({ name, key, length, width, srcId });
+  // Banded edges reduce the raw cut size (finished − tape thickness). `flen`/`fwid` keep the finished size for reference.
+  const add = (name, key, length, width, srcId) => items.push({
+    name, key, srcId, flen: length, fwid: width,
+    length: Math.max(1, length - bandLenReduce(key)), width: Math.max(1, width - bandWidthReduce(key)),
+  });
   // Sides shorten where an outset cap overlays them; width is the full depth. Skip removed sides.
   if (sideLOn()) add('Side', 'Side', sideHeight(), d, 'L');
   if (sideROn()) add('Side', 'Side', sideHeight(), d, 'R');
@@ -427,7 +443,7 @@ function renderCutList() {
   $('cutlist-summary').innerHTML =
     (job ? `Scope: <b>whole job</b> · ${JOB.modules.length} module(s)<br>` : '') +
     `Parts: <b>${totalParts}</b><br>Board area: <b>${(areaMM2 / 1e6).toFixed(3)} m²</b><br>` +
-    `Edge tape: <b>${(tapeMM / 1000).toFixed(2)} m</b><br>` +
+    `Edge tape: <b>${(tapeMM / 1000).toFixed(2)} m</b> <span class="muted">(${fmt(tapeTh())}×${fmt(tapeWd())} mm)</span><br>` +
     `Sheets needed: <b>${pack.sheets.length}</b> · Utilisation: <b>${(Math.min(1, pack.utilisation) * 100).toFixed(1)}%</b>`;
   return pack;
 }
@@ -1050,6 +1066,7 @@ function syncInputs() {
   inSW.value = fmt(S.sheet.w); inSH.value = fmt(S.sheet.h); inKerf.value = fmt(S.sheet.kerf);
   inGrain.checked = S.grainLock; inPreset.value = S.preset;
   if (inWoodTheme) inWoodTheme.value = S.woodTheme || 'birch';
+  if (inTapeTh) inTapeTh.value = String(tapeTh()); if (inTapeWd) inTapeWd.value = String(tapeWd());
   inReveal.value = fmt(S.doors.reveal); inExplode.value = S.explode; inDims.checked = S.showDims;
   inBackType.value = S.backPanel.type; inBackThk.value = fmt(S.backPanel.thickness);
   inBackGroove.value = fmt(S.backPanel.groove); inBackSetback.value = fmt(S.backPanel.setback);
@@ -1169,7 +1186,7 @@ function renderSelectionPanel() {
       row('sel-yoff', 'From bottom', fmt(off)) +
       coverRow;
     const dr = doorRectsFor(comp)[0];
-    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)}. Door occupies ${fmtU(off)}–${fmtU(off + spanH)} up the column (front ${fmtU(dr.y1 - dr.y0)} × ${fmtU(dr.x1 - dr.x0)}). Set Height + From bottom to place a drawer below and this door above — no shelf needed.`;
+    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)}. Door occupies ${fmtU(off)}–${fmtU(off + spanH)} up the column (front ${fmtU(dr.y1 - dr.y0)} × ${fmtU(dr.x1 - dr.x0)}). Set Height + From bottom to place a drawer below and this door above — no shelf needed.` + bandInfo('Door');
     actions.classList.remove('hidden');
   } else if (comp && comp.type === 'drawer') {
     const cell = cellAt(comp.ax, comp.ay, null), rect = drawerRect(comp);
@@ -1219,7 +1236,8 @@ function renderSelectionPanel() {
     derived.textContent =
       (segs.length > 1 ? `Cut into ${segs.length} pieces · ` : '') +
       (comp.depth != null ? 'Custom depth' : `Depth = usable ${fmtU(usable)}`) +
-      ` · Setback = gap from the back panel front face.`;
+      ` · Setback = gap from the back panel front face.` +
+      bandInfo(isShelf ? 'Shelf' : 'Vertical');
     actions.classList.remove('hidden');
   } else if (id === 'T' || id === 'B') {
     // Editable top/bottom cap — same props as the setup card, reachable by selecting the panel in 2D/3D/cut list.
@@ -1550,6 +1568,7 @@ function hydrateModule(raw) {
   const m = Object.assign(DEFAULTS(), raw);
   if (!m.cab.top) m.cab.top = { mount: 'inset', depth: null, anchor: 'back' };        // older saves predate editable caps
   if (!m.cab.bottom) m.cab.bottom = { mount: 'inset', depth: null, anchor: 'back' };
+  if (!m.edgeTape) m.edgeTape = { thickness: 0.8, width: 25 };                           // older saves predate tape spec
   for (const c of m.comps) if (c.type === 'divider') c.type = 'vertical';   // migrate old terminology
   if (m.band && m.band.Divider) { m.band.Vertical = m.band.Divider; delete m.band.Divider; }
   m.band = Object.assign(defaultBand(), m.band || {});
@@ -1661,6 +1680,8 @@ inSideL.addEventListener('change', () => { S.cab.sideL = inSideL.checked; render
 inSideR.addEventListener('change', () => { S.cab.sideR = inSideR.checked; render(); });
 inGrain.addEventListener('change', () => { S.grainLock = inGrain.checked; render(); });
 if (inWoodTheme) inWoodTheme.addEventListener('change', () => { S.woodTheme = inWoodTheme.value; render(); });
+if (inTapeTh) inTapeTh.addEventListener('change', () => { (S.edgeTape || (S.edgeTape = { thickness: 0.8, width: 25 })).thickness = parseFloat(inTapeTh.value) || 0; render(); });
+if (inTapeWd) inTapeWd.addEventListener('change', () => { (S.edgeTape || (S.edgeTape = { thickness: 0.8, width: 25 })).width = parseFloat(inTapeWd.value) || 0; render(); });
 inPreset.addEventListener('change', () => { S.preset = inPreset.value; if (PRESETS[S.preset]) { Object.assign(S.cab, PRESETS[S.preset]); readInputs(); syncInputs(); } });
 $('btn-add-door').addEventListener('click', () => addComp('door'));
 $('btn-door-cells').addEventListener('click', () => setCellMode(true));
