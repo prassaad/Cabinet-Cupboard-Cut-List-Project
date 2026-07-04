@@ -32,6 +32,7 @@
         <div class="btn-row drawer-row">
           <button id="btn-add-drawer" type="button">+ Drawers</button>
           <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="1" /></label>
+          <label class="chk" title="Frame the drawer with a side panel (flank) on each side, sized to the drawer height. Uncheck to add the drawer only."><input id="in-drawer-sides" type="checkbox" checked /> Side panels</label>
         </div>
         <details class="hint-help">
           <summary>How this works</summary>
@@ -236,6 +237,7 @@
               </label>
               <label>Tape width
                 <select id="in-tape-wd">
+                  <option value="22">22 mm</option>
                   <option value="25">25 mm</option>
                   <option value="30">30 mm</option>
                   <option value="40">40 mm</option>
@@ -243,7 +245,7 @@
                 </select>
               </label>
               <div id="band-grid" class="band-grid"></div>
-              <p class="hint">Tick the edges to band per part. Thickness is subtracted from the raw cut size on those edges (finished size fills the opening); width is the roll to buy — keep it ≥ the material thickness so it covers the edge.</p>
+              <p class="hint">Tick the edges to band per part — edges are named as on the part (Front/Back are the long visible edges; the ends butt into the carcass). Thickness is subtracted from the raw cut size on those edges (finished size fills the opening); width is the roll to buy — keep it ≥ the material thickness so it covers the edge.</p>
             </section>
           </div>
         </div>
@@ -278,7 +280,7 @@
         <div class="table-wrap">
           <table id="cutlist">
             <thead>
-              <tr><th>Part</th><th>Qty</th><th>Length</th><th>Width</th><th>Edges</th></tr>
+              <tr><th>Part</th><th>Qty</th><th>Width</th><th>Height</th><th>Depth</th><th>Thick</th><th>Edges</th></tr>
             </thead>
             <tbody></tbody>
           </table>
@@ -287,6 +289,7 @@
         <div class="btn-row">
           <button id="btn-export" type="button">Export CSV</button>
           <button id="btn-pdf" type="button">Export PDF</button>
+          <button id="btn-prod" type="button" title="Print-ready shop drawings (2D elevation + 3D + parts + sheet nesting). Follows the Module/Job toggle above: Module = this cabinet only, Job = all modules.">Production Pack</button>
         </div>
       </section>
     </aside>

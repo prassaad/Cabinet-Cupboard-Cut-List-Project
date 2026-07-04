@@ -92,8 +92,11 @@ select {
 
 .btn-row { display: flex; gap: 8px; }
 .btn-row button { flex: 1; }
+.drawer-row { flex-wrap: wrap; align-items: center; }
 .drawer-row .qty { display: flex; align-items: center; gap: 6px; color: var(--muted); margin: 0; }
 .drawer-row .qty input { width: 52px; }
+.drawer-row .chk { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; margin: 0; white-space: nowrap; cursor: pointer; }
+.drawer-row .chk input { width: auto; margin: 0; }
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
 .muted { color: var(--muted); }
 /* Collapsible help — collapsed by default; user clicks the summary to reveal the hint. */
@@ -198,7 +201,7 @@ body.no-modules .setup-empty { display: block; }
 .band-grid { display: grid; grid-template-columns: 1fr auto auto auto auto; gap: 5px 8px; align-items: center; font-size: 12px; }
 .band-grid .bh { color: var(--muted); text-align: center; font-size: 11px; }
 .band-grid .rl { color: var(--ink); }
-.band-grid .bc { text-align: center; }
+.band-grid .bc { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .band-grid input { margin: 0; }
 
 .canvas-wrap { position: relative; flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-height: 0; }

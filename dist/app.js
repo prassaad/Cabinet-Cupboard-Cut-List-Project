@@ -16,6 +16,18 @@ const PART_TYPES = [
   ['Vertical', 'Verticals'], ['Door', 'Doors'], ['Back', 'Back'],
 ];
 const EDGES = ['L1', 'L2', 'W1', 'W2'];   // L edges run along length, W edges along width
+// Human edge names per part type. The model treats L1/L2 (long edges) and W1/W2 (end edges) as generic;
+// this maps them to how a cabinetmaker talks: on a carcass panel the two long edges are Front & Back and
+// the ends butt into the box; on a door they are the Left & Right stiles with Top & Bottom rails.
+const EDGE_LABELS = {
+  Side:      { L1: 'Front', L2: 'Back',   W1: 'Top',  W2: 'Bottom' },
+  TopBottom: { L1: 'Front', L2: 'Back',   W1: 'Left', W2: 'Right'  },
+  Shelf:     { L1: 'Front', L2: 'Back',   W1: 'Left', W2: 'Right'  },
+  Vertical:  { L1: 'Front', L2: 'Back',   W1: 'Top',  W2: 'Bottom' },
+  Door:      { L1: 'Left',  L2: 'Right',  W1: 'Top',  W2: 'Bottom' },
+  Back:      { L1: 'Top',   L2: 'Bottom', W1: 'Left', W2: 'Right'  },
+};
+const edgeLabel = (key, e) => (EDGE_LABELS[key] && EDGE_LABELS[key][e]) || e;
 
 // Edge banding is OFF by default for every part (user unchecks by default for now). The per-part
 // keys are kept so the banding toggles — and later auto-banding — have a place to write into.
@@ -58,6 +70,13 @@ const WOOD_THEMES = {
   walnut: { label: 'Walnut', wood: [124, 92, 60],   back: [92, 66, 42],    shelf: [116, 86, 56],   vert: [110, 82, 52],   door: [120, 90, 58],   p2d: '#8a6742', e2d: '#b08a5f' },
 };
 const woodPal = () => WOOD_THEMES[S.woodTheme] || WOOD_THEMES.birch;
+// Fixed dark-wood palette for the 2D DESIGN view — deliberately independent of the setup wood theme so the
+// white measurement text always reads well on a reference-style dark wood field.
+const D2D = { field: '#814a28', frame: '#98592f', frameLine: '#4d2b15', part: '#a5642f', partEdge: '#5f3717' };
+let dimMask = D2D.field;   // colour used to mask the dim line behind a measurement label (set per-render to the current field)
+// The design canvas sits on the --card surface; with no back panel the interior shows THAT same colour
+// (open carcass — indistinguishable from the surrounding canvas), not a separate tone.
+const CANVAS_BG = (getComputedStyle(document.documentElement).getPropertyValue('--card') || '').trim() || '#2f343d';
 
 let S = DEFAULTS();
 S.name = '';   // dummy working state; no module is active until the user adds one
@@ -83,8 +102,9 @@ const inBotMount = $('in-bot-mount'), inBotDepth = $('in-bot-depth'), inBotAncho
 const inTopOn = $('in-top-on'), inBotOn = $('in-bot-on'), inSideL = $('in-side-l'), inSideR = $('in-side-r');
 const inWoodTheme = $('in-wood-theme');
 const inTapeTh = $('in-tape-th'), inTapeWd = $('in-tape-wd');
-const designCanvas = $('design-canvas'), sheetCanvas = $('sheet-canvas'), roomCanvas = $('room-canvas');
-const dctx = designCanvas.getContext('2d');
+let designCanvas = $('design-canvas');   // `let` so the production-pack exporter can temporarily retarget rendering to an off-screen canvas
+const sheetCanvas = $('sheet-canvas'), roomCanvas = $('room-canvas');
+let dctx = designCanvas.getContext('2d');
 const sctx = sheetCanvas.getContext('2d');
 const rctx = roomCanvas.getContext('2d');
 const btnDelete = $('btn-delete');
@@ -98,20 +118,20 @@ const unitStep = () => S.unit === 'mm' ? 1 : 0.125;
 
 // ---------- Banding helpers ----------
 const edgeOn = (key, e) => !!(S.band[key] && S.band[key][e]);
-const bandNotation = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return on.length ? on.join(',') : '—'; };
+const bandNotation = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return on.length ? on.map(e => edgeLabel(key, e)).join(', ') : '—'; };
 const bandLen = (key, length, width) =>
   (edgeOn(key, 'L1') ? length : 0) + (edgeOn(key, 'L2') ? length : 0) +
   (edgeOn(key, 'W1') ? width : 0) + (edgeOn(key, 'W2') ? width : 0);
 // Edge-tape spec (selectable). Thickness is subtracted from the raw cut size on each banded edge; width is
 // the roll width (should be >= the board thickness so it covers the edge).
-const EDGE_THICKS = [0.8, 1.3, 2], EDGE_WIDTHS = [25, 30, 40, 45];
+const EDGE_THICKS = [0.8, 1.3, 2], EDGE_WIDTHS = [22, 25, 30, 40, 45];
 const tapeTh = () => (S.edgeTape && +S.edgeTape.thickness) || 0;
 const tapeWd = () => (S.edgeTape && +S.edgeTape.width) || 0;
 // W1/W2 sit at the length ends → reduce LENGTH; L1/L2 run along the length at the width ends → reduce WIDTH.
 const bandLenReduce = (key) => (edgeOn(key, 'W1') ? tapeTh() : 0) + (edgeOn(key, 'W2') ? tapeTh() : 0);
 const bandWidthReduce = (key) => (edgeOn(key, 'L1') ? tapeTh() : 0) + (edgeOn(key, 'L2') ? tapeTh() : 0);
 // One-line banding summary for the selected-part panel (empty when nothing is banded on that part type).
-const bandInfo = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return on.length ? ` · Edge tape ${on.join(',')} · ${fmt(tapeTh())}×${fmt(tapeWd())} mm (cut = finished − tape)` : ''; };
+const bandInfo = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return on.length ? ` · Edge tape ${on.map(e => edgeLabel(key, e)).join(', ')} · ${fmt(tapeTh())}×${fmt(tapeWd())} mm (cut = finished − tape)` : ''; };
 
 // Back panel geometry derived from the configurable fixing type.
 //  - overlay : full-size panel on the rear (length w × height h), front face at z = thickness
@@ -155,23 +175,27 @@ const sideROn = () => S.cab.sideR !== false;
 const sideY0 = () => (capOn('bottom') && capOutset('bottom')) ? S.cab.t : 0;
 const sideY1 = () => (capOn('top') && capOutset('top')) ? S.cab.h - S.cab.t : S.cab.h;
 const sideHeight = () => Math.max(1, sideY1() - sideY0());
-// Interior envelope. Verticals/openings run the SIDE height (inset top/bottom caps don't shorten them) —
-// or the full cabinet envelope when no side exists. Left/right follows the sides: between them when present,
-// out to the edge when a side is removed. So a new vertical always matches the side height.
+// Interior envelope. A vertical divider (and every opening) lives BETWEEN the top & bottom panels:
+// when a cap is present the divider sits on that cap's inner face (t or h−t), so it is ALWAYS inside the
+// caps and never overlaps them. With a cap removed the interior runs out to that edge. Left/right follows
+// the sides: between them when present, out to the edge when a side is removed.
 const anySide = () => sideLOn() || sideROn();
 const innerL = () => sideLOn() ? S.cab.t : 0;
 const innerR = () => sideROn() ? S.cab.w - S.cab.t : S.cab.w;
-const innerB = () => anySide() ? sideY0() : 0;
-const innerT = () => anySide() ? sideY1() : S.cab.h;
+const innerB = () => capOn('bottom') ? S.cab.t : 0;
+const innerT = () => capOn('top') ? S.cab.h - S.cab.t : S.cab.h;
 
 // ---------- Geometry: cells, spans, segments ----------
 function normalizeComps() {
-  const { w, h, t } = S.cab;
   for (const c of S.comps) {
     if (c.type === 'drawer' || c.type === 'door') continue;
     if (c.a0 == null || c.a1 == null) {
       if (c.type === 'shelf') { c.a0 = innerL(); c.a1 = innerR(); } else { c.a0 = innerB(); c.a1 = innerT(); }
     }
+    // Pull the span inside the current envelope so a divider never overlaps the caps/sides —
+    // e.g. a full-height vertical from an older layout is drawn back between the top & bottom panels.
+    const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
+    c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi));
   }
 }
 // Panel thickness for a shelf/vertical: its own override (e.g. a 25 mm drawer flank) or the cabinet default.
@@ -272,6 +296,21 @@ function drawerRect(c) {
   else bottom = (c.valign || 'bottom') === 'top' ? cell.top - H : cell.bottom;
   return { left, right: left + W, bottom, top: bottom + H };
 }
+// Keep a drawer's linked flank verticals (side panels) sized to the drawer's height. Called after the drawer is
+// created or edited so the flanks track its vertical extent. A flank the user has deleted is simply skipped —
+// and the drawer then widens to the next boundary on its own (drawerRect reads the live cell via cellAt).
+function syncDrawerFlanks(d) {
+  if (!d || d.type !== 'drawer' || !Array.isArray(d.flanks) || !d.flanks.length) return;
+  const rect = drawerRect(d);   // band computed with the flanks still covering the current ay, so it's correct
+  // Anchor the drawer inside its own vertical band: the flanks span that band, so keeping ay within it lets
+  // cellAt (which bounds the drawer's width) actually see the flanks. Without this the drawer would ignore
+  // flanks that no longer reach its old centre anchor and spill to the full cell width.
+  d.ay = (rect.bottom + rect.top) / 2;
+  for (const fid of d.flanks) {
+    const f = S.comps.find(x => x.id === fid && x.type === 'vertical');
+    if (f) { f.a0 = rect.bottom; f.a1 = rect.top; }
+  }
+}
 // Per-side reveal gaps around each drawer front (Left/Right/Top/Bottom). Each defaults to half the global
 // reveal so untouched drawers look the same; the drawer editor can override any side to fit the view.
 const drawerGaps = (c) => ({
@@ -310,11 +349,12 @@ function drawerParts(c) {
   const parts = [];
   for (let i = 0; i < n; i++) {
     const f = fronts[i];
-    parts.push({ name: 'Drawer front', key: 'Door', length: Math.max(1, f.y1 - f.y0), width: Math.max(1, f.x1 - f.x0) });
-    parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH });
-    parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH });
-    parts.push({ name: 'Drawer back', key: 'DrawerBox', length: boxInnerW, width: boxH });
-    parts.push({ name: 'Drawer bottom', key: 'DrawerBox', length: boxInnerW, width: depth });
+    // face maps [length,width] to spatial axes; the third axis carries the board thickness `t`.
+    parts.push({ name: 'Drawer front', key: 'Door', length: Math.max(1, f.y1 - f.y0), width: Math.max(1, f.x1 - f.x0), face: 'HW', t });
+    parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH, face: 'DH', t });
+    parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH, face: 'DH', t });
+    parts.push({ name: 'Drawer back', key: 'DrawerBox', length: boxInnerW, width: boxH, face: 'WH', t });
+    parts.push({ name: 'Drawer bottom', key: 'DrawerBox', length: boxInnerW, width: depth, face: 'WD', t });
   }
   return parts;
 }
@@ -326,32 +366,37 @@ function cutListInstances() {
   const { w, h, d, t, back } = S.cab;
   const items = [];
   // Banded edges reduce the raw cut size (finished − tape thickness). `flen`/`fwid` keep the finished size for reference.
-  const add = (name, key, length, width, srcId) => items.push({
-    name, key, srcId, flen: length, fwid: width,
-    length: Math.max(1, length - bandLenReduce(key)), width: Math.max(1, width - bandWidthReduce(key)),
-  });
-  // Sides shorten where an outset cap overlays them; width is the full depth. Skip removed sides.
-  if (sideLOn()) add('Side', 'Side', sideHeight(), d, 'L');
-  if (sideROn()) add('Side', 'Side', sideHeight(), d, 'R');
-  // Top/bottom caps: length depends on mount (inset = w-2t, outset = w), width = the cap's own depth. Skip removed caps.
+  // Each part carries spatial dims w/h/d (left-right / top-bottom / front-back) + thickness `thick`: `face` maps the
+  // two cut dims [length,width] to their axes and the remaining axis takes the board thickness. length/width are kept
+  // for sheet nesting, board-area and edge-banding math; w/h/d/thick drive the human-readable cut list & editors.
+  const add = (name, key, length, width, srcId, face, thick) => {
+    const cutL = Math.max(1, length - bandLenReduce(key)), cutW = Math.max(1, width - bandWidthReduce(key));
+    const ax = { W: thick, H: thick, D: thick }; ax[face[0]] = cutL; ax[face[1]] = cutW;
+    items.push({ name, key, srcId, face, flen: length, fwid: width, length: cutL, width: cutW, w: ax.W, h: ax.H, d: ax.D, thick });
+  };
+  // Sides span the cabinet height × depth; the board thickness is their left-right width. Skip removed sides.
+  if (sideLOn()) add('Side', 'Side', sideHeight(), d, 'L', 'HD', t);
+  if (sideROn()) add('Side', 'Side', sideHeight(), d, 'R', 'HD', t);
+  // Top/bottom caps span the cabinet width (inset = w-2t, outset = w) × the cap's own depth; thickness is their height. Skip removed caps.
   const topOn = capOn('top'), botOn = capOn('bottom');
   const topLen = capWidth('top'), topW = capDepth('top'), botLen = capWidth('bottom'), botW = capDepth('bottom');
   if (topOn && botOn && topLen === botLen && topW === botW) {   // both present & identical: grouped "Top / Bottom" (qty 2)
-    add('Top / Bottom', 'TopBottom', topLen, topW, 'T'); add('Top / Bottom', 'TopBottom', botLen, botW, 'B');
+    add('Top / Bottom', 'TopBottom', topLen, topW, 'T', 'WD', t); add('Top / Bottom', 'TopBottom', botLen, botW, 'B', 'WD', t);
   } else {                                                      // otherwise list whichever are present, separately
-    if (topOn) add('Top', 'TopBottom', topLen, topW, 'T');
-    if (botOn) add('Bottom', 'TopBottom', botLen, botW, 'B');
+    if (topOn) add('Top', 'TopBottom', topLen, topW, 'T', 'WD', t);
+    if (botOn) add('Bottom', 'TopBottom', botLen, botW, 'B', 'WD', t);
   }
-  if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W, 'BK'); }
+  // Back panel spans the cabinet width × height; thickness is its own (thinner) board depth.
+  if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W, 'BK', 'WH', S.backPanel.thickness); }
   for (const c of S.comps) {
-    if (c.type === 'shelf') for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c), c.id);
-    else if (c.type === 'vertical') for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c), c.id);
-    else if (c.type === 'drawer') for (const p of drawerParts(c)) add(p.name, p.key, p.length, p.width, c.id);
+    if (c.type === 'shelf') for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c), c.id, 'WD', partThick(c));
+    else if (c.type === 'vertical') for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c), c.id, 'HD', partThick(c));
+    else if (c.type === 'drawer') for (const p of drawerParts(c)) add(p.name, p.key, p.length, p.width, c.id, p.face, p.t);
   }
-  for (const r of doorRects()) add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0, r.id);
+  for (const r of doorRects()) add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0, r.id, 'HW', t);
   return items;
 }
-const groupKey = (it) => `${it.name}|${Math.round(it.length)}|${Math.round(it.width)}|${it.key}`;
+const groupKey = (it) => `${it.name}|${Math.round(it.length)}|${Math.round(it.width)}|${Math.round(it.thick || 0)}|${it.key}`;
 // Map each cut-list group back to a representative design part id, so clicking a cutlist row
 // or a sheet piece can select the matching component/face in the 2D/3D design.
 function groupKeyToSrc() {
@@ -408,17 +453,17 @@ function instancesForSelection() {
   const id = S.selectedId; if (id == null) return [];
   if (typeof id === 'number') {
     const c = S.comps.find(x => x.id === id); if (!c) return [];
-    if (c.type === 'drawer') return drawerParts(c).map(p => ({ name: p.name, key: p.key, length: p.length, width: p.width }));
-    if (c.type === 'door') return doorRectsFor(c).map(r => ({ name: 'Door', key: 'Door', length: r.y1 - r.y0, width: r.x1 - r.x0 }));
+    if (c.type === 'drawer') return drawerParts(c).map(p => ({ name: p.name, key: p.key, length: p.length, width: p.width, thick: p.t }));
+    if (c.type === 'door') return doorRectsFor(c).map(r => ({ name: 'Door', key: 'Door', length: r.y1 - r.y0, width: r.x1 - r.x0, thick: S.cab.t }));
     const d = compDepth(c);
     return (c.type === 'shelf' ? shelfSegments(c) : verticalSegments(c))
-      .map(s => ({ name: c.type === 'shelf' ? 'Shelf' : 'Vertical', key: c.type === 'shelf' ? 'Shelf' : 'Vertical', length: s.len, width: d }));
+      .map(s => ({ name: c.type === 'shelf' ? 'Shelf' : 'Vertical', key: c.type === 'shelf' ? 'Shelf' : 'Vertical', length: s.len, width: d, thick: partThick(c) }));
   }
   const { w, h, d, t } = S.cab, innerW = Math.max(0, w - 2 * t);
-  if (id === 'L' || id === 'R') return [{ name: 'Side', key: 'Side', length: h, width: d }];
-  if (id === 'T' || id === 'B') return [{ name: 'Top / Bottom', key: 'TopBottom', length: innerW, width: d }];
-  if (id === 'BK') { if (!S.cab.back) return []; const g = backGeom(); return [{ name: 'Back', key: 'Back', length: g.L, width: g.W }]; }
-  if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? [{ name: 'Door', key: 'Door', length: r.y1 - r.y0, width: r.x1 - r.x0 }] : []; }
+  if (id === 'L' || id === 'R') return [{ name: 'Side', key: 'Side', length: h, width: d, thick: t }];
+  if (id === 'T' || id === 'B') return [{ name: 'Top / Bottom', key: 'TopBottom', length: innerW, width: d, thick: t }];
+  if (id === 'BK') { if (!S.cab.back) return []; const g = backGeom(); return [{ name: 'Back', key: 'Back', length: g.L, width: g.W, thick: S.backPanel.thickness }]; }
+  if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? [{ name: 'Door', key: 'Door', length: r.y1 - r.y0, width: r.x1 - r.x0, thick: S.cab.t }] : []; }
   return [];
 }
 const selectedGroupKeys = () => new Set(instancesForSelection().map(groupKey));
@@ -430,20 +475,24 @@ function renderCutList() {
   const tbody = document.querySelector('#cutlist tbody');
   tbody.innerHTML = parts.map(p => {
     const bn = job ? (p.band || '—') : bandNotation(p.key);
-    return `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${bn}</td></tr>`;
+    return `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${bn}</td></tr>`;
   }).join('');
   const ths = document.querySelectorAll('#cutlist thead th');
-  ths[2].textContent = `Length (${S.unit})`; ths[3].textContent = `Width (${S.unit})`;
+  ths[2].textContent = `Width (${S.unit})`; ths[3].textContent = `Height (${S.unit})`; ths[4].textContent = `Depth (${S.unit})`; ths[5].textContent = `Thick (${S.unit})`;
 
   const totals = job ? jobTotals() : null;
   const totalParts = job ? totals.partCount : parts.reduce((n, p) => n + p.qty, 0);
   const areaMM2 = job ? totals.areaMM2 : parts.reduce((a, p) => a + p.qty * p.length * p.width, 0);
   const tapeMM = job ? totals.tapeMM : parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0);
   const pack = job ? jobNest() : nest(cutListInstances());
+  // Tape width is a purchasing spec (it covers the board EDGE) — it never changes cut sizes; but warn when the
+  // chosen roll is too narrow to cover the edge. Updates live because the width control calls render().
+  const tapeWarn = (tapeMM > 0 && tapeWd() > 0 && tapeWd() < S.cab.t)
+    ? `<br><span style="color:var(--danger)">⚠ Tape width ${Math.round(tapeWd())} mm &lt; board ${Math.round(S.cab.t)} mm — won't cover the edge</span>` : '';
   $('cutlist-summary').innerHTML =
     (job ? `Scope: <b>whole job</b> · ${JOB.modules.length} module(s)<br>` : '') +
     `Parts: <b>${totalParts}</b><br>Board area: <b>${(areaMM2 / 1e6).toFixed(3)} m²</b><br>` +
-    `Edge tape: <b>${(tapeMM / 1000).toFixed(2)} m</b> <span class="muted">(${fmt(tapeTh())}×${fmt(tapeWd())} mm)</span><br>` +
+    `Edge tape: <b>${(tapeMM / 1000).toFixed(2)} m</b> <span class="muted">(${fmt(tapeTh())}×${fmt(tapeWd())} mm)</span>${tapeWarn}<br>` +
     `Sheets needed: <b>${pack.sheets.length}</b> · Utilisation: <b>${(Math.min(1, pack.utilisation) * 100).toFixed(1)}%</b>`;
   return pack;
 }
@@ -524,7 +573,7 @@ function drawMeasureOverlay(ctx, measure) {
     ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const wpx = ctx.measureText(txt).width;
     ctx.fillStyle = 'rgba(20,24,30,0.85)'; ctx.fillRect(mx - wpx / 2 - 6, my - 9, wpx + 12, 18);
-    ctx.fillStyle = '#ffd9a0'; ctx.fillText(txt, mx, my);
+    ctx.fillStyle = '#ffffff'; ctx.fillText(txt, mx, my);
   } else {
     ctx.fillStyle = '#9aa3b2'; ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     ctx.fillText('Click the second point…', a.x + 8, a.y - 8);
@@ -581,9 +630,35 @@ function clampComp(c) {
   if (c.type === 'shelf') { const cell = cellAt((c.a0 + c.a1) / 2, c.pos, c.id); c.pos = Math.min(Math.max(c.pos, cell.bottom + ht), cell.top - ht); }
   else { const cell = cellAt(c.pos, (c.a0 + c.a1) / 2, c.id); c.pos = Math.min(Math.max(c.pos, cell.left + ht), cell.right - ht); }
 }
+// Snap a shelf/vertical against one side/end of its current cell — the anchor dropdowns act as a seating command
+// (like the drawer's Top/Bottom). axis 'pos' seats its position across the opening; 'span' seats the resizable
+// span (a0..a1) along the opening, keeping its current size. clampComp then keeps the result legal.
+function seatComp(c, axis, anchor) {
+  const cell = c.type === 'shelf'
+    ? cellAt((c.a0 + c.a1) / 2, c.pos, c.id)
+    : cellAt(c.pos, (c.a0 + c.a1) / 2, c.id);
+  const ht = partThick(c) / 2;
+  if (axis === 'pos') {
+    const lo = c.type === 'shelf' ? cell.bottom : cell.left;
+    const hi = c.type === 'shelf' ? cell.top : cell.right;
+    c.pos = anchor === 'start' ? lo + ht : anchor === 'end' ? hi - ht : (lo + hi) / 2;
+  } else {   // seat the span
+    const lo = c.type === 'shelf' ? cell.left : cell.bottom;
+    const hi = c.type === 'shelf' ? cell.right : cell.top;
+    const len = Math.max(1, Math.min(c.a1 - c.a0, hi - lo));
+    if (anchor === 'start') { c.a0 = lo; c.a1 = lo + len; }
+    else if (anchor === 'end') { c.a1 = hi; c.a0 = hi - len; }
+    else { const ctr = (lo + hi) / 2; c.a0 = ctr - len / 2; c.a1 = ctr + len / 2; }
+  }
+  clampComp(c);
+}
 
+// CAP: when set (by the production-pack exporter) fitCanvas sizes the target to an explicit
+// off-screen resolution instead of the on-screen CSS box, so drawings export crisp at print DPI.
+let CAP = null;
 function fitCanvas(canvas, ctx) {
-  const dpr = window.devicePixelRatio || 1, r = canvas.getBoundingClientRect();
+  const dpr = CAP ? CAP.dpr : (window.devicePixelRatio || 1);
+  const r = CAP ? { width: CAP.w, height: CAP.h } : canvas.getBoundingClientRect();
   canvas.width = Math.max(1, Math.round(r.width * dpr)); canvas.height = Math.max(1, Math.round(r.height * dpr));
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { cw: r.width, ch: r.height };
@@ -611,89 +686,129 @@ function fillRectMM(ctx, r0, fill, stroke) {
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.strokeRect(x + 0.5, y + 0.5, wpx - 1, hpx - 1); }
 }
 function dimLabel(ctx, text, x, y, vertical) {
-  ctx.save(); ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.save(); ctx.font = '600 11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const wpx = ctx.measureText(text).width + 8;
   ctx.translate(x, y); if (vertical) ctx.rotate(-Math.PI / 2);
-  ctx.fillStyle = '#262b33'; ctx.fillRect(-wpx / 2, -8, wpx, 16);
-  ctx.fillStyle = '#f1e4ba'; ctx.fillText(text, 0, 0); ctx.restore();
+  // No black box: mask the dim line behind the number with the wood field colour (invisible against the
+  // field). Pure flat white text — no glow/shadow/emboss.
+  ctx.fillStyle = dimMask; ctx.fillRect(-wpx / 2, -8, wpx, 16);
+  ctx.fillStyle = '#ffffff'; ctx.fillText(text, 0, 0); ctx.restore();
 }
-// thin double-headed dimension arrows drawn BESIDE a part (not on it)
-const DIMCOL = '#8a97a8';
-const arrowH = (ctx, x, y, sign) => { ctx.moveTo(x, y); ctx.lineTo(x + sign * 5, y - 3); ctx.moveTo(x, y); ctx.lineTo(x + sign * 5, y + 3); };
-const arrowV = (ctx, x, y, sign) => { ctx.moveTo(x, y); ctx.lineTo(x - 3, y + sign * 5); ctx.moveTo(x, y); ctx.lineTo(x + 3, y + sign * 5); };
-function hDim(ctx, x0mm, x1mm, ymm, sdir, valMM) {   // sdir -1 = arrow above part, +1 = below
-  const half = (S.cab.t / 2) * view.scale, xA = sx(x0mm), xB = sx(x1mm);
-  const nearEdge = sy(ymm) + sdir * half, lineY = nearEdge + sdir * 14;
-  if (Math.abs(xB - xA) >= 18) {
-    ctx.strokeStyle = DIMCOL; ctx.lineWidth = 1; ctx.beginPath();
-    ctx.moveTo(xA, nearEdge); ctx.lineTo(xA, lineY);
-    ctx.moveTo(xB, nearEdge); ctx.lineTo(xB, lineY);
-    ctx.moveTo(xA, lineY); ctx.lineTo(xB, lineY);
-    arrowH(ctx, xA, lineY, 1); arrowH(ctx, xB, lineY, -1);
-    ctx.stroke();
-  }
-  dimLabel(ctx, fmtU(valMM), (xA + xB) / 2, lineY, false);
-}
-function vDim(ctx, y0mm, y1mm, xmm, sdir, valMM) {   // sdir +1 = arrow right of part, -1 = left
-  const half = (S.cab.t / 2) * view.scale, yA = sy(y0mm), yB = sy(y1mm);
-  const nearEdge = sx(xmm) + sdir * half, lineX = nearEdge + sdir * 14;
-  if (Math.abs(yA - yB) >= 18) {
-    ctx.strokeStyle = DIMCOL; ctx.lineWidth = 1; ctx.beginPath();
-    ctx.moveTo(nearEdge, yA); ctx.lineTo(lineX, yA);
-    ctx.moveTo(nearEdge, yB); ctx.lineTo(lineX, yB);
-    ctx.moveTo(lineX, yA); ctx.lineTo(lineX, yB);
-    arrowV(ctx, lineX, yA, 1); arrowV(ctx, lineX, yB, -1);
-    ctx.stroke();
-  }
-  dimLabel(ctx, fmtU(valMM), lineX, (yA + yB) / 2, true);
-}
+// Small FILLED triangular arrowheads for dimension lines. Self-contained (own path + fill), so call them
+// AFTER stroking the dimension line — never while the line's path is still open (the beginPath would reset it).
+const DIMCOL = '#8a97a8', AHEAD = 4;
+function arrowH(ctx, x, y, sign) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + sign * AHEAD, y - 2); ctx.lineTo(x + sign * AHEAD, y + 2); ctx.closePath(); ctx.fillStyle = DIMCOL; ctx.fill(); }
+function arrowV(ctx, x, y, sign) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - 2, y + sign * AHEAD); ctx.lineTo(x + 2, y + sign * AHEAD); ctx.closePath(); ctx.fillStyle = DIMCOL; ctx.fill(); }
 
-// Unique opening cells (gaps bounded by parts), used by both 2D and 3D dimensioning.
+// Interior openings as NON-OVERLAPPING maximal rectangles, used by both 2D and 3D dimensioning. Built on an
+// elementary grid of EVERY part edge on BOTH axes (a vertical contributes its x-faces AND its y-span ends;
+// a shelf the reverse), then open elementary cells are joined into horizontal runs and runs stacked while the
+// band below matches. Result: a divider only splits the openings along the height it actually spans — a
+// partial/short divider no longer splits the clear opening above or below it into two phantom widths.
 function enumerateOpenings() {
-  const { w, h, t } = S.cab;
   const xs = new Set([innerL(), innerR()]), ys = new Set([innerB(), innerT()]);
   for (const c of S.comps) {
+    if (c.type !== 'shelf' && c.type !== 'vertical') continue;   // drawers/doors carry no span (would inject NaN)
     const ht = partThick(c) / 2;
-    if (c.type === 'vertical') { xs.add(c.pos - ht); xs.add(c.pos + ht); }
-    else { ys.add(c.pos - ht); ys.add(c.pos + ht); }
+    if (c.type === 'vertical') { xs.add(c.pos - ht); xs.add(c.pos + ht); ys.add(c.a0); ys.add(c.a1); }
+    else { ys.add(c.pos - ht); ys.add(c.pos + ht); xs.add(c.a0); xs.add(c.a1); }
   }
-  const xa = [...xs].sort((a, b) => a - b), ya = [...ys].sort((a, b) => a - b), seen = new Set(), out = [];
-  for (let i = 0; i < xa.length - 1; i++) {
-    const mx = (xa[i] + xa[i + 1]) / 2;
-    for (let j = 0; j < ya.length - 1; j++) {
-      const cell = cellAt(mx, (ya[j] + ya[j + 1]) / 2, null);
-      const sig = `${Math.round(cell.left)},${Math.round(cell.bottom)},${Math.round(cell.top)}`;
-      if (seen.has(sig)) continue; seen.add(sig); out.push(cell);
+  const xa = [...xs].filter(Number.isFinite).sort((a, b) => a - b);
+  const ya = [...ys].filter(Number.isFinite).sort((a, b) => a - b);
+  const nx = xa.length - 1, ny = ya.length - 1;
+  if (nx < 1 || ny < 1) return [];
+  const openCell = (i, j) => {                       // is elementary cell (col i, row j) clear of every part?
+    const cx = (xa[i] + xa[i + 1]) / 2, cy = (ya[j] + ya[j + 1]) / 2;
+    for (const c of S.comps) {
+      if (c.type !== 'shelf' && c.type !== 'vertical') continue;
+      const r = partRect(c);
+      if (cx > r.x0 && cx < r.x1 && cy > r.y0 && cy < r.y1) return false;
     }
+    return true;
+  };
+  const rowRuns = [];                                // per row band: maximal horizontal runs [i0,i1] of open cells
+  for (let j = 0; j < ny; j++) {
+    const runs = []; let i = 0;
+    while (i < nx) {
+      if (!openCell(i, j)) { i++; continue; }
+      let k = i; while (k + 1 < nx && openCell(k + 1, j)) k++;
+      runs.push([i, k]); i = k + 1;
+    }
+    rowRuns.push(runs);
+  }
+  const used = rowRuns.map(runs => runs.map(() => false)), out = [];
+  for (let j = 0; j < ny; j++) for (let ri = 0; ri < rowRuns[j].length; ri++) {
+    if (used[j][ri]) continue;
+    const [i0, i1] = rowRuns[j][ri]; let j2 = j;
+    while (j2 + 1 < ny) {                             // extend the rectangle down while the band below has the same run
+      const b = rowRuns[j2 + 1].findIndex(r => r[0] === i0 && r[1] === i1);
+      if (b < 0 || used[j2 + 1][b]) break;
+      used[j2 + 1][b] = true; j2++;
+    }
+    used[j][ri] = true;
+    out.push({ left: xa[i0], right: xa[i1 + 1], bottom: ya[j], top: ya[j2 + 1] });
   }
   return out;
 }
 
 // Plain centred label with a background chip (used for 3D dims where rotation varies).
 function label3D(text, x, y) {
-  dctx.save(); dctx.font = '11px system-ui, sans-serif'; dctx.textAlign = 'center'; dctx.textBaseline = 'middle';
+  dctx.save(); dctx.font = '600 11px system-ui, sans-serif'; dctx.textAlign = 'center'; dctx.textBaseline = 'middle';
   const wpx = dctx.measureText(text).width + 8;
-  dctx.fillStyle = '#262b33'; dctx.fillRect(x - wpx / 2, y - 8, wpx, 16);
-  dctx.fillStyle = '#f1e4ba'; dctx.fillText(text, x, y); dctx.restore();
+  dctx.fillStyle = 'rgba(20,24,30,0.9)'; dctx.fillRect(x - wpx / 2, y - 8, wpx, 16);
+  dctx.fillStyle = '#ffffff'; dctx.fillText(text, x, y); dctx.restore();
 }
 
-// Clear vertical opening height, drawn just inside the left edge of a cell.
-function openingDim(ctx, yLoMM, yHiMM, xLeftMM) {
-  const yA = sy(yLoMM), yB = sy(yHiMM);
-  if (Math.abs(yA - yB) < 16) return;   // too small to label legibly
-  const x = sx(xLeftMM) + 16;
-  ctx.strokeStyle = DIMCOL; ctx.lineWidth = 1; ctx.beginPath();
-  ctx.moveTo(x, yA); ctx.lineTo(x, yB);
-  arrowV(ctx, x, yA, 1); arrowV(ctx, x, yB, -1);
-  ctx.stroke();
-  dimLabel(ctx, fmtU(yHiMM - yLoMM), x, (yA + yB) / 2, true);
+// One compact, non-overlapping dimension per opening cell: height just inside the left edge and width
+// just inside the top edge. Each axis is skipped when the cell is too small to label cleanly, so tight
+// openings stay uncluttered instead of stacking labels.
+function cellDim(ctx, cell) {
+  const xL = sx(cell.left), xR = sx(cell.right), yT = sy(cell.top), yB = sy(cell.bottom);   // yT < yB on screen
+  const wPx = xR - xL, hPx = yB - yT, INSET = 14;
+  if (hPx >= 24 && wPx >= 18) {                       // height — vertical, inside the left edge
+    const x = xL + INSET;
+    ctx.strokeStyle = DIMCOL; ctx.lineWidth = 1; ctx.beginPath();
+    ctx.moveTo(x, yT + 3); ctx.lineTo(x, yB - 3); ctx.stroke();
+    arrowV(ctx, x, yT + 3, 1); arrowV(ctx, x, yB - 3, -1);
+    dimLabel(ctx, fmtU(cell.top - cell.bottom), x, (yT + yB) / 2, true);
+  }
+  if (wPx >= 30 && hPx >= 18) {                       // width — horizontal, inside the top edge
+    const y = yT + INSET;
+    ctx.strokeStyle = DIMCOL; ctx.lineWidth = 1; ctx.beginPath();
+    ctx.moveTo(xL + 3, y); ctx.lineTo(xR - 3, y); ctx.stroke();
+    arrowH(ctx, xL + 3, y, 1); arrowH(ctx, xR - 3, y, -1);
+    dimLabel(ctx, fmtU(cell.right - cell.left), (xL + xR) / 2, y, false);
+  }
+}
+
+// Overall outside dimensions: height to the LEFT of the carcass, width along the BOTTOM — each with two
+// extension lines, filled arrowheads and a masked label, like the reference elevation.
+function drawOverallDims(w, h) {
+  const x0 = sx(0), x1 = sx(w), yB = sy(0), yT = sy(h), OFF = 32;
+  dctx.strokeStyle = DIMCOL; dctx.lineWidth = 1;
+  const hx = x0 - OFF;                                // height dimension, left of the carcass
+  dctx.beginPath();
+  dctx.moveTo(x0, yB); dctx.lineTo(hx - 4, yB);      // bottom extension line
+  dctx.moveTo(x0, yT); dctx.lineTo(hx - 4, yT);      // top extension line
+  dctx.moveTo(hx, yB); dctx.lineTo(hx, yT);          // dimension line
+  dctx.stroke();
+  arrowV(dctx, hx, yB, -1); arrowV(dctx, hx, yT, 1);
+  dimLabel(dctx, fmtU(h), hx, (yB + yT) / 2, true);
+  const wy = yB + OFF;                                // width dimension, below the carcass
+  dctx.beginPath();
+  dctx.moveTo(x0, yB); dctx.lineTo(x0, wy + 4);      // left extension line
+  dctx.moveTo(x1, yB); dctx.lineTo(x1, wy + 4);      // right extension line
+  dctx.moveTo(x0, wy); dctx.lineTo(x1, wy);          // dimension line
+  dctx.stroke();
+  arrowH(dctx, x0, wy, 1); arrowH(dctx, x1, wy, -1);
+  dimLabel(dctx, fmtU(w), (x0 + x1) / 2, wy, false);
 }
 
 function drawDrawer2D(c) {
   const sel = c.id === S.selectedId;
   for (const f of drawerFronts(c)) {
     const y1 = f.y1, r = { x0: f.x0, x1: f.x1, y0: f.y0, y1 };
-    fillRectMM(dctx, r, sel ? 'rgba(255,180,84,0.92)' : woodPal().p2d, sel ? '#ffd9a0' : woodPal().e2d);
+    fillRectMM(dctx, r, sel ? 'rgba(255,180,84,0.92)' : D2D.part, sel ? '#ffd9a0' : D2D.partEdge);
     const cx = sx((r.x0 + r.x1) / 2), hy = sy(y1) + 14;          // handle near the top of each front
     dctx.strokeStyle = '#2a1d02'; dctx.lineWidth = 2; dctx.beginPath(); dctx.moveTo(cx - 18, hy); dctx.lineTo(cx + 18, hy); dctx.stroke();
   }
@@ -705,29 +820,30 @@ function renderDesign() {
   computeView(cw, ch);
   const { w, h, t } = S.cab;
 
-  fillRectMM(dctx, { x0: innerL(), x1: innerR(), y0: innerB(), y1: innerT() }, '#222831', null);
-  const wall = '#6b7686', wline = '#aeb7c6';
+  // Fixed dark-wood look for the design view (D2D), independent of the setup wood theme. The interior field
+  // shows the back panel's wood ONLY when a back is fitted; with no back the carcass is open (dark).
+  const field = S.cab.back ? D2D.field : CANVAS_BG;
+  dimMask = field;
+  fillRectMM(dctx, { x0: innerL(), x1: innerR(), y0: innerB(), y1: innerT() }, field, null);
+  const wall = D2D.frame, wline = D2D.frameLine;
   const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
   if (sideLOn()) fillRectMM(dctx, { x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
   if (sideROn()) fillRectMM(dctx, { x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
   if (capOn('bottom')) fillRectMM(dctx, { x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
   if (capOn('top')) fillRectMM(dctx, { x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
-
-  const P2 = woodPal();
+  dctx.save();   // soft drop shadow gives shelves/dividers/drawers depth against the brighter wood field
+  dctx.shadowColor = 'rgba(0,0,0,0.4)'; dctx.shadowBlur = 6; dctx.shadowOffsetX = 1; dctx.shadowOffsetY = 3;
   for (const c of S.comps) {
     if (c.type === 'drawer') continue;
     const sel = c.id === S.selectedId;
-    fillRectMM(dctx, partRect(c), sel ? '#ffb454' : P2.p2d, sel ? '#ffd9a0' : P2.e2d);
+    fillRectMM(dctx, partRect(c), sel ? '#ffb454' : D2D.part, sel ? '#ffd9a0' : D2D.partEdge);
   }
   for (const c of S.comps) if (c.type === 'drawer') drawDrawer2D(c);
-  // dimension arrows BESIDE each part (shelf: above, vertical: right)
-  for (const c of S.comps) {
-    if (c.type === 'shelf') for (const s of shelfSegments(c)) hDim(dctx, s.lo, s.hi, c.pos, -1, s.len);
-    else if (c.type === 'vertical') for (const s of verticalSegments(c)) vDim(dctx, s.lo, s.hi, c.pos, 1, s.len);
-  }
-  // clear opening heights between shelves (and floor/top), per cell
-  if (S.comps.some(c => c.type === 'shelf'))
-    for (const cell of enumerateOpenings()) openingDim(dctx, cell.bottom, cell.top, cell.left);
+  dctx.restore();
+  // ONE compact dimension per opening — width along its top, height down its left. Opening-based, so the
+  // shelf/divider segment sizes are never drawn a second time on top of the opening sizes (that duplicate
+  // height label was the overlap). Cut sizes still live in the cut-list table.
+  for (const cell of enumerateOpenings()) cellDim(dctx, cell);
 
   // doors overlay (translucent so internals stay visible)
   for (const r of doorRects()) {
@@ -746,11 +862,12 @@ function renderDesign() {
       fillRectMM(dctx, { x0: cell.left, x1: cell.right, y0: cell.bottom, y1: cell.top }, 'rgba(90,150,255,0.28)', '#7db0ff');
   }
 
-  dctx.fillStyle = '#9aa3b2'; dctx.font = '12px system-ui, sans-serif'; dctx.textAlign = 'center';
-  dctx.fillText(`W ${fmtU(w)}`, sx(w / 2), view.oy - 22);
-  dctx.save(); dctx.translate(view.ox - 30, sy(h / 2)); dctx.rotate(-Math.PI / 2);
-  dctx.fillText(`H ${fmtU(h)}`, 0, 0); dctx.restore();
-  dctx.textAlign = 'left'; dctx.fillText(`depth ${fmtU(S.cab.d)}`, 12, ch - 12);
+  // Overall outside dimensions (height left, width bottom) as real dimension lines. Labels mask against
+  // the canvas background since they sit outside the carcass.
+  dimMask = CANVAS_BG;
+  drawOverallDims(w, h);
+  dctx.fillStyle = '#9aa3b2'; dctx.font = '12px system-ui, sans-serif'; dctx.textAlign = 'left';
+  dctx.fillText(`depth ${fmtU(S.cab.d)}`, 12, ch - 12);
   dSnapPts = [];   // carcass + part corners for measure snapping
   const addSnap = (xmm, ymm) => dSnapPts.push({ x: sx(xmm), y: sy(ymm) });
   [[0, 0], [w, 0], [0, h], [w, h], [w / 2, 0], [w / 2, h], [0, h / 2], [w, h / 2]].forEach(([X, Y]) => addSnap(X, Y));
@@ -1278,9 +1395,10 @@ function render() {
 
 // ---------- Banding grid UI ----------
 function buildBandGrid() {
-  let html = '<span></span>' + EDGES.map(e => `<span class="bh">${e}</span>`).join('');
+  // Each checkbox is labelled with that part's own edge name (Front/Back/…), so there's no shared L1/L2 header.
+  let html = '';
   for (const [key, label] of PART_TYPES)
-    html += `<span class="rl">${label}</span>` + EDGES.map(e => `<span class="bc"><input type="checkbox" data-key="${key}" data-edge="${e}"></span>`).join('');
+    html += `<span class="rl">${label}</span>` + EDGES.map(e => `<label class="bc" title="${edgeLabel(key, e)} edge (${e})"><input type="checkbox" data-key="${key}" data-edge="${e}"><span>${edgeLabel(key, e)}</span></label>`).join('');
   const grid = $('band-grid'); grid.innerHTML = html;
   grid.addEventListener('change', (e) => {
     const el = e.target; if (!el.dataset.key) return;
@@ -1340,15 +1458,23 @@ function addComp(type) {
   const { w, h, t } = S.cab;
   const p = S.lastPoint || { x: w / 2, y: h / 2 };
   if (type === 'drawer') {
-    // Auto-frame the drawer with a vertical flank on the left and right; the drawer cell sits between them.
     const cell = cellAt(p.x, p.y, null);
-    const ft = Math.min(FLANK_T, Math.max(1, (cell.right - cell.left) / 2 - 1));   // never wider than half the opening
-    const a0 = cell.bottom, a1 = cell.top;
-    const left = { id: S._seq++, type: 'vertical', pos: cell.left + ft / 2, a0, a1, thick: ft };
-    const right = { id: S._seq++, type: 'vertical', pos: cell.right - ft / 2, a0, a1, thick: ft };
     const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount(), valign: 'top', h: 150 };   // defaults: 1 drawer, anchored to top, 150 mm tall
-    clampComp(left); clampComp(right); clampComp(c);
-    S.comps.push(left, right, c); S.selectedId = c.id; render(); return;
+    const created = [];
+    // Optional: frame the drawer with a vertical flank (side panel) on the left and right, sized to the drawer
+    // height and linked to it so they track the drawer as it resizes. Toggle via the "Side panels" checkbox.
+    if (drawerSidePanels()) {
+      const ft = Math.min(FLANK_T, Math.max(1, (cell.right - cell.left) / 2 - 1));   // never wider than half the opening
+      const left = { id: S._seq++, type: 'vertical', pos: cell.left + ft / 2, a0: cell.bottom, a1: cell.top, thick: ft };
+      const right = { id: S._seq++, type: 'vertical', pos: cell.right - ft / 2, a0: cell.bottom, a1: cell.top, thick: ft };
+      clampComp(left); clampComp(right);
+      c.flanks = [left.id, right.id];
+      created.push(left, right);
+    }
+    clampComp(c);
+    S.comps.push(...created, c);
+    syncDrawerFlanks(c);                       // shrink the flanks to the drawer's height
+    S.selectedId = c.id; render(); return;
   }
   if (type === 'door') {
     // Fits the single clicked cell. To span several bays across shelves, use "Pick cells for door".
@@ -1362,11 +1488,20 @@ function addComp(type) {
   clampComp(c); S.comps.push(c); S.selectedId = c.id; render();
 }
 const drawerCount = () => { const v = parseInt(($('in-drawer-count') || {}).value, 10) || 1; return Math.max(1, Math.min(12, v)); };
+// Side-panels checkbox: when on (default), a new drawer is framed with two flank verticals sized to its height.
+const drawerSidePanels = () => { const el = $('in-drawer-sides'); return el ? !!el.checked : true; };
 const doorLeaves = () => (parseInt(($('in-door-leaves') || {}).value, 10) === 2 ? 2 : 1);
 function deleteSelected() {
   const id = S.selectedId;
   if (id == null) return;
-  if (typeof id === 'number') S.comps = S.comps.filter(c => c.id !== id);   // a component
+  if (typeof id === 'number') {                                             // a component
+    const comp = S.comps.find(c => c.id === id);
+    const remove = new Set([id]);
+    // Deleting a drawer removes its linked side panels (flanks) too. Deleting a flank on its own is allowed —
+    // the drawer then widens to the next boundary automatically (drawerRect reads the live cell).
+    if (comp && comp.type === 'drawer' && Array.isArray(comp.flanks)) comp.flanks.forEach(fid => remove.add(fid));
+    S.comps = S.comps.filter(c => !remove.has(c.id));
+  }
   else if (id === 'T') { if (S.cab.top) S.cab.top.on = false; }             // carcass panels: flag off (restore via setup toggles)
   else if (id === 'B') { if (S.cab.bottom) S.cab.bottom.on = false; }
   else if (id === 'L') S.cab.sideL = false;
@@ -1379,15 +1514,16 @@ function deleteSelected() {
 // ---------- Selected-component editor ----------
 // Fixed carcass/door parts (selected by clicking a face in 3D) have a string id; report their size read-only.
 function carcassPartInfo(id) {
-  const { d } = S.cab;
-  if (id === 'L' || id === 'R') return { name: 'Side', length: sideHeight(), width: d };
-  if (id === 'T') return { name: 'Top', length: capWidth('top'), width: capDepth('top') };
-  if (id === 'B') return { name: 'Bottom', length: capWidth('bottom'), width: capDepth('bottom') };
-  if (id === 'BK') { if (!S.cab.back) return null; const g = backGeom(); return { name: 'Back', length: g.L, width: g.W }; }
-  if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? { name: 'Door', length: r.y1 - r.y0, width: r.x1 - r.x0 } : null; }
+  const { d, t } = S.cab;
+  // Spatial w/h/d (left-right / top-bottom / front-back) + board thickness for each fixed part.
+  if (id === 'L' || id === 'R') return { name: 'Side', w: t, h: sideHeight(), d, thick: t };
+  if (id === 'T') return { name: 'Top', w: capWidth('top'), h: t, d: capDepth('top'), thick: t };
+  if (id === 'B') return { name: 'Bottom', w: capWidth('bottom'), h: t, d: capDepth('bottom'), thick: t };
+  if (id === 'BK') { if (!S.cab.back) return null; const g = backGeom(); return { name: 'Back', w: g.L, h: g.W, d: S.backPanel.thickness, thick: S.backPanel.thickness }; }
+  if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? { name: 'Door', w: r.x1 - r.x0, h: r.y1 - r.y0, d: t, thick: t } : null; }
   return null;
 }
-let lastAnchor = 'center';    // resize anchor for the span field (shelf Length / vertical Height)
+let lastAnchor = 'center';    // resize anchor for the span field (shelf Width / vertical Height)
 let lastVAnchor = 'center';   // position anchor for the pos field (shelf Height / vertical Position): which face the value refers to
 function renderSelectionPanel() {
   const card = $('card-selected'), fields = $('sel-fields'), derived = $('sel-derived'), actions = $('sel-actions'), title = $('sel-title');
@@ -1418,7 +1554,7 @@ function renderSelectionPanel() {
       row('sel-yoff', 'From bottom', fmt(off)) +
       coverRow;
     const dr = doorRectsFor(comp)[0];
-    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)}. Door occupies ${fmtU(off)}–${fmtU(off + spanH)} up the column (front ${fmtU(dr.y1 - dr.y0)} × ${fmtU(dr.x1 - dr.x0)}). Set Height + From bottom to place a drawer below and this door above — no shelf needed.` + bandInfo('Door');
+    derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)}. Door occupies ${fmtU(off)}–${fmtU(off + spanH)} up the column (front ${fmtU(dr.x1 - dr.x0)} × ${fmtU(dr.y1 - dr.y0)} W×H). Set Height + From bottom to place a drawer below and this door above — no shelf needed.` + bandInfo('Door');
     actions.classList.remove('hidden');
   } else if (comp && comp.type === 'drawer') {
     const cell = cellAt(comp.ax, comp.ay, null), rect = drawerRect(comp);
@@ -1456,12 +1592,12 @@ function renderSelectionPanel() {
         `<option value="start"${selV('start')}>${isShelf ? 'Bottom' : 'Left'}</option>` +
         `<option value="center"${selV('center')}>Middle</option>` +
         `<option value="end"${selV('end')}>${isShelf ? 'Top' : 'Right'}</option></select></label>` +
-      row('sel-len', isShelf ? 'Length' : 'Height', fmt(comp.a1 - comp.a0)) +
-      `<label class="sel-row"><span>${isShelf ? 'Length anchor' : 'Height anchor'}</span><select id="sel-anchor">` +
+      row('sel-len', isShelf ? 'Width' : 'Height', fmt(comp.a1 - comp.a0)) +
+      `<label class="sel-row"><span>${isShelf ? 'Width anchor' : 'Height anchor'}</span><select id="sel-anchor">` +
         `<option value="start"${sel('start')}>${isShelf ? 'Left' : 'Bottom'}</option>` +
         `<option value="center"${sel('center')}>${isShelf ? 'Center' : 'Middle'}</option>` +
         `<option value="end"${sel('end')}>${isShelf ? 'Right' : 'Top'}</option></select></label>` +
-      row('sel-thick', isShelf ? 'Thickness' : 'Width', fmt(partThick(comp))) +
+      row('sel-thick', 'Thickness', fmt(partThick(comp))) +
       row('sel-depth', 'Depth', fmt(compDepth(comp))) +
       row('sel-setback', 'Setback from back', fmt(comp.setback || 0));
     const segs = isShelf ? shelfSegments(comp) : verticalSegments(comp), usable = usableDepth();
@@ -1490,9 +1626,10 @@ function renderSelectionPanel() {
     const deletable = (id === 'L' || id === 'R' || id === 'BK');   // sides + back can be removed; restore via Setup toggles
     title.innerHTML = `${info.name} <small>(${u})</small>`;
     fields.innerHTML =
-      `<div class="sel-ro">Length <b>${fmtU(info.length)}</b></div>` +
-      `<div class="sel-ro">Width <b>${fmtU(info.width)}</b></div>` +
-      `<div class="sel-ro">Thickness <b>${fmtU(S.cab.t)}</b></div>`;
+      `<div class="sel-ro">Width <b>${fmtU(info.w)}</b></div>` +
+      `<div class="sel-ro">Height <b>${fmtU(info.h)}</b></div>` +
+      `<div class="sel-ro">Depth <b>${fmtU(info.d)}</b></div>` +
+      `<div class="sel-ro">Thickness <b>${fmtU(info.thick)}</b></div>`;
     derived.textContent = deletable
       ? 'Read-only size (set via cabinet Sizes). Delete removes this panel — restore it from Setup.'
       : 'Fixed part — change its size via the cabinet Sizes above.';
@@ -1528,22 +1665,33 @@ function applySelectedEdit() {
   }
   if (c.type === 'drawer') {
     const cnt = parseInt(($('sel-count') || {}).value, 10) || 1; c.count = Math.max(1, Math.min(12, cnt));
+    const prevVA = c.valign || 'bottom';
     c.valign = (($('sel-valign') || {}).value) || 'bottom';
     const cell = cellAt(c.ax, c.ay, null), cw = cell.right - cell.left, ch = cell.top - cell.bottom;
     const W = get('sel-w'), H = get('sel-h');   // store only when smaller than the cell, so a full-cell bank keeps tracking the cell
     if (W > 0 && Math.abs(W - cw) > 0.5) c.w = Math.max(1, Math.min(W, cw)); else delete c.w;
     if (H > 0 && Math.abs(H - ch) > 0.5) c.h = Math.max(1, Math.min(H, ch)); else delete c.h;
-    const off = get('sel-yoff'), maxOff = ch - (c.h != null ? c.h : ch);   // From-bottom offset (overrides valign when set)
-    if (off > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
+    // From-bottom offset overrides valign. Switching the Anchor re-seats the bank against the chosen edge (drop the
+    // stale offset); otherwise only keep the offset when it actually differs from the anchored position, so an
+    // untouched bank keeps following its Top/Bottom anchor instead of freezing where it happens to sit.
+    const bandH = c.h != null ? c.h : ch, maxOff = ch - bandH, anchoredOff = c.valign === 'top' ? maxOff : 0;
+    if (c.valign !== prevVA) {
+      delete c.yoff;                                          // re-seat the bank against the newly chosen edge
+      const yo = $('sel-yoff'); if (yo) yo.value = fmt(anchoredOff);   // and reflect it in the From-bottom field
+    } else {
+      const off = get('sel-yoff');
+      if (off > 0.5 && Math.abs(off - anchoredOff) > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
+    }
     const usable = usableDepth(), dep = get('sel-depth'); if (dep > 0 && Math.abs(dep - usable) > 0.5) c.depth = Math.max(1, Math.min(dep, usable)); else delete c.depth;
     if ((($('sel-mount') || {}).value) === 'inset') c.mount = 'inset'; else delete c.mount;
     // Per-side front gaps (dummy reveal) — recalculates the front size, cut list, 2D and 3D.
     c.gapL = Math.max(0, get('sel-gap-l')); c.gapR = Math.max(0, get('sel-gap-r'));
     c.gapT = Math.max(0, get('sel-gap-t')); c.gapB = Math.max(0, get('sel-gap-b'));
+    syncDrawerFlanks(c);                        // keep linked side panels sized to the new drawer height
     render(); return;
   }
   const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
-  // Resize from Length + Anchor, measured against the component's current span.
+  // Resize from the span field (shelf Width / vertical Height) + Anchor, measured against the component's current span.
   const anchor = ($('sel-anchor') || {}).value || lastAnchor; lastAnchor = anchor;
   let len = get('sel-len'); if (!(len > 0)) len = c.a1 - c.a0;
   let a0, a1;
@@ -1659,7 +1807,9 @@ window.addEventListener('mousemove', (e) => {
     s.left += dx; s.right += dx; s.bottom += dy; s.top += dy; drag.comp.ax = mx; drag.comp.ay = my;
   } else if (drag.comp.type === 'drawer' || drag.comp.type === 'door') { drag.comp.ax = mx; drag.comp.ay = my; }
   else drag.comp.pos = drag.comp.type === 'shelf' ? my : mx;
-  clampComp(drag.comp); render();
+  clampComp(drag.comp);
+  if (drag.comp.type === 'drawer') syncDrawerFlanks(drag.comp);   // keep linked side panels sized to the drawer
+  render();
 });
 designCanvas.addEventListener('wheel', (e) => {
   e.preventDefault(); dMeasure = null;
@@ -1853,8 +2003,8 @@ function exportCSV() {
   if (!JOB.modules.length) { flash($('btn-export'), 'No modules'); return; }
   const job = isJobScope();
   const parts = job ? jobCutList() : cutList();
-  const rows = [['Part', 'Qty', `Length (${S.unit})`, `Width (${S.unit})`, 'Banded edges']];
-  parts.forEach(p => rows.push([p.name, p.qty, fmt(p.length), fmt(p.width), `"${job ? (p.band || '—') : bandNotation(p.key)}"`]));
+  const rows = [['Part', 'Qty', `Width (${S.unit})`, `Height (${S.unit})`, `Depth (${S.unit})`, `Thick (${S.unit})`, 'Banded edges']];
+  parts.forEach(p => rows.push([p.name, p.qty, fmt(p.w), fmt(p.h), fmt(p.d), fmt(p.thick), `"${job ? (p.band || '—') : bandNotation(p.key)}"`]));
   const blob = new Blob([rows.map(r => r.join(',')).join('\n')], { type: 'text/csv' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'cutlist.csv'; a.click(); URL.revokeObjectURL(a.href);
 }
@@ -1871,7 +2021,7 @@ function exportPDF() {
     return `<figure><img src="${c.toDataURL('image/png')}"/><figcaption>Sheet ${i + 1} — ${fmt(pack.SW)}×${fmt(pack.SH)} ${S.unit}</figcaption></figure>`;
   }).join('');
   const tape = (job ? jobTotals().tapeMM : parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0)) / 1000;
-  const rows = parts.map(p => `<tr><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.length)}</td><td>${fmt(p.width)}</td><td>${job ? (p.band || '—') : bandNotation(p.key)}</td></tr>`).join('');
+  const rows = parts.map(p => `<tr><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${job ? (p.band || '—') : bandNotation(p.key)}</td></tr>`).join('');
   const heading = job
     ? `Job ${escapeHtml(JOB.name || 'Job 1')} · ${JOB.modules.length} module(s) · grain ${S.grainLock ? 'locked' : 'free'} · edge tape ${tape.toFixed(2)} m`
     : `Cabinet ${fmt(S.cab.w)}×${fmt(S.cab.h)}×${fmt(S.cab.d)} ${S.unit} · material ${fmtU(S.cab.t)} · doors ${doorRects().length} · grain ${S.grainLock ? 'locked' : 'free'} · edge tape ${tape.toFixed(2)} m`;
@@ -1883,10 +2033,122 @@ function exportPDF() {
   </style></head><body>
     <h1>Cabinet &amp; Cupboard — Cut List</h1>
     <p>${heading}</p>
-    <table><thead><tr><th>Part</th><th>Qty</th><th>Length (${S.unit})</th><th>Width (${S.unit})</th><th>Edges</th></tr></thead><tbody>${rows}</tbody></table>
+    <table><thead><tr><th>Part</th><th>Qty</th><th>Width (${S.unit})</th><th>Height (${S.unit})</th><th>Depth (${S.unit})</th><th>Thick (${S.unit})</th><th>Edges</th></tr></thead><tbody>${rows}</tbody></table>
     <h2>Sheet layout — ${pack.sheets.length} sheet(s), utilisation ${(Math.min(1, pack.utilisation) * 100).toFixed(1)}%</h2>${imgs}
     <button onclick="window.print()">Print / Save as PDF</button></body></html>`);
   win.document.close(); setTimeout(() => win.print(), 350);
+}
+
+// ---------- Production pack (shop drawings) ----------
+// Render one module's 2D elevation or 3D isometric to an off-screen canvas at print DPI and return a PNG data URL.
+// Reuses the live renderDesign / renderDesign3D so the drawing (and its dimensions) matches exactly what the user sees,
+// but with neutral framing: fit-to-view, no pan, assembled (no explode), dimensions on.
+function captureDesign(m, mode, w, h) {
+  const cv = document.createElement('canvas');
+  const pC = designCanvas, pD = dctx, pCAP = CAP;
+  designCanvas = cv; dctx = cv.getContext('2d'); CAP = { w, h, dpr: 2 };
+  try {
+    return withModule(m, () => {
+      const saved = { zoom: m.zoom, pan: m.pan, zoom3d: m.zoom3d, pan3d: m.pan3d, explode: m.explode, showDims: m.showDims };
+      m.zoom = 1; m.pan = { x: 0, y: 0 }; m.zoom3d = 1; m.pan3d = { x: 0, y: 0 }; m.explode = 0; m.showDims = true;
+      (mode === '3d' ? renderDesign3D : renderDesign)();
+      Object.assign(m, saved);
+      // Composite onto white so the drawing sits on paper (canvas transparency reads as black in some PDF viewers).
+      const out = document.createElement('canvas'); out.width = cv.width; out.height = cv.height;
+      const o = out.getContext('2d'); o.fillStyle = '#fff'; o.fillRect(0, 0, out.width, out.height); o.drawImage(cv, 0, 0);
+      return out.toDataURL('image/png');
+    });
+  } finally { designCanvas = pC; dctx = pD; CAP = pCAP; }
+}
+
+function exportProductionPack() {
+  if (!JOB.modules.length) { flash($('btn-prod'), 'No modules'); return; }
+  if (JOB.active >= 0 && JOB.modules[JOB.active]) JOB.modules[JOB.active] = S;   // fold in-progress edits into the job
+  flash($('btn-prod'), 'Rendering…');
+  const job = isJobScope();   // respect the cut-list Module ⇄ Job toggle: Module = active module only, Job = all modules
+  const active = (JOB.active >= 0 && JOB.modules[JOB.active]) ? JOB.modules[JOB.active] : S;
+  const mods = job ? JOB.modules : [active];
+  const IMG_W = 540, IMG_H = 380;
+  const blocks = mods.map((m, i) => {
+    const img2d = captureDesign(m, '2d', IMG_W, IMG_H);
+    const img3d = captureDesign(m, '3d', IMG_W, IMG_H);
+    const info = withModule(m, () => {
+      const parts = cutList();
+      const rows = parts.map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${bandNotation(p.key)}</td></tr>`).join('');
+      const tape = parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0) / 1000;
+      return {
+        title: `${escapeHtml(m.name || `Module ${i + 1}`)}${m.code ? ` · ${escapeHtml(m.code)}` : ''}`,
+        spec: `${fmt(m.cab.w)}×${fmt(m.cab.h)}×${fmt(m.cab.d)} ${m.unit} · material ${fmtU(m.cab.t)} · doors ${doorRects().length} · edge tape ${tape.toFixed(2)} m`,
+        unit: m.unit, rows
+      };
+    });
+    return `<section class="mod">
+      <h2><span class="num">${i + 1}</span> ${info.title}</h2>
+      <p class="spec">${info.spec}</p>
+      <div class="views">
+        <figure><img src="${img2d}"><figcaption>Front elevation — dimensioned</figcaption></figure>
+        <figure><img src="${img3d}"><figcaption>3D isometric</figcaption></figure>
+      </div>
+      <table><thead><tr><th>Part</th><th>Qty</th><th>Width (${info.unit})</th><th>Height (${info.unit})</th><th>Depth (${info.unit})</th><th>Thick (${info.unit})</th><th>Edges</th></tr></thead><tbody>${info.rows}</tbody></table>
+    </section>`;
+  }).join('');
+
+  // Sheet nesting + totals for the chosen scope.
+  const pack = job ? jobNest() : nest(cutListInstances());
+  const scale = 680 / Math.max(pack.SW, pack.SH);
+  const sheetImgs = pack.sheets.map((sheet, i) => {
+    const c = document.createElement('canvas'); c.width = Math.round(pack.SW * scale); c.height = Math.round(pack.SH * scale);
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.strokeStyle = '#333'; x.strokeRect(0.5, 0.5, c.width - 1, c.height - 1);
+    sheet.placements.forEach(p => drawPlacement(x, p, 0, 0, scale, true, { sheetNo: i + 1 }));
+    return `<figure><img src="${c.toDataURL('image/png')}"><figcaption>Sheet ${i + 1} — ${fmt(pack.SW)}×${fmt(pack.SH)} ${S.unit}</figcaption></figure>`;
+  }).join('');
+  const tapeMM = job ? jobTotals().tapeMM : cutList().reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0);
+  const when = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><title>${escapeHtml(JOB.name || 'Job')} — Production Pack</title><style>
+    :root{--ink:#161a20;--mut:#5b6470;--line:#c9cfd8;--accent:#2f6b4f}
+    *{box-sizing:border-box}body{font:13px/1.45 system-ui,Segoe UI,sans-serif;color:var(--ink);margin:0;padding:28px 32px}
+    header.cover{border-bottom:2px solid var(--accent);padding-bottom:14px;margin-bottom:22px}
+    .brand{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700}
+    h1{font-size:22px;margin:4px 0 6px}.meta{color:var(--mut);font-size:12.5px}
+    section.mod{page-break-inside:avoid;border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin:0 0 18px}
+    section.mod h2{font-size:15px;margin:0 0 2px;display:flex;align-items:center;gap:8px}
+    .num{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;border-radius:11px;background:var(--accent);color:#fff;font-size:12px}
+    .spec{color:var(--mut);margin:0 0 10px;font-size:12.5px}
+    .views{display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+    .views figure{margin:0;flex:1 1 240px;min-width:220px}
+    .views img{width:100%;height:auto;border:1px solid var(--line);border-radius:6px;background:#fff}
+    figcaption{color:var(--mut);font-size:11.5px;margin-top:4px;text-align:center}
+    table{border-collapse:collapse;width:100%;font-size:12px}
+    th,td{border:1px solid var(--line);padding:3px 8px;text-align:right}th:first-child,td:first-child{text-align:left}
+    thead th{background:#f2f4f7}
+    h2.sec{font-size:16px;border-bottom:1px solid var(--line);padding-bottom:6px;margin:26px 0 14px;page-break-before:auto}
+    .sheets{display:flex;flex-wrap:wrap;gap:16px}.sheets figure{margin:0}.sheets img{max-width:340px;border:1px solid var(--line)}
+    .totals{display:flex;gap:26px;flex-wrap:wrap;margin:10px 0 0;font-size:13px}.totals b{font-size:16px;color:var(--accent)}
+    footer{margin-top:26px;color:var(--mut);font-size:11px;border-top:1px solid var(--line);padding-top:10px}
+    button.print{position:fixed;top:14px;right:16px;padding:8px 16px;border:0;border-radius:6px;background:var(--accent);color:#fff;font-size:13px;cursor:pointer}
+    @media print{button.print{display:none}body{padding:0}}
+  </style></head><body>
+    <button class="print" onclick="window.print()">Print / Save as PDF</button>
+    <header class="cover">
+      <div class="brand">WallView · Production Pack</div>
+      <h1>${escapeHtml(JOB.name || 'Job')}</h1>
+      <div class="meta">${mods.length} module(s) · ${job ? 'whole job' : 'single module'} · grain ${S.grainLock ? 'locked' : 'free'} · generated ${when}</div>
+    </header>
+    ${blocks}
+    <h2 class="sec">Sheet layout — ${pack.sheets.length} sheet(s), utilisation ${(Math.min(1, pack.utilisation) * 100).toFixed(1)}%</h2>
+    <div class="totals">
+      <span>Sheets<br><b>${pack.sheets.length}</b> × ${fmt(pack.SW)}×${fmt(pack.SH)} ${S.unit}</span>
+      <span>Edge tape<br><b>${(tapeMM / 1000).toFixed(2)}</b> m</span>
+      <span>Utilisation<br><b>${(Math.min(1, pack.utilisation) * 100).toFixed(1)}</b> %</span>
+    </div>
+    <div class="sheets" style="margin-top:14px">${sheetImgs}</div>
+    <footer>Generated by WallView — Scale · Design · Cut. All dimensions in the unit shown per module. Verify on site before cutting.</footer>
+  </body></html>`);
+  win.document.close();
+  render();                                     // restore the on-screen view (capture overwrote transient render globals)
+  setTimeout(() => { try { win.focus(); } catch (e) {} }, 200);
+  flash($('btn-prod'), 'Opened ✓');
 }
 
 // ---------- Wire up ----------
@@ -1974,14 +2236,21 @@ const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.
 const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
 $('sel-fields').addEventListener('change', liveChange);
-// Changing a shelf/vertical position anchor re-reads the field to the current face, so an unchanged number never moves the part.
+// The shelf/vertical anchor dropdowns are seating commands: changing one snaps the part to that side/end of its
+// opening (like the drawer's Top/Bottom). Position anchor seats it across the opening; Height/Width anchor seats
+// the resizable span along it. The numeric Position/Height fields still fine-tune from the seated position.
 $('sel-fields').addEventListener('change', (e) => {
-  if (e.target.id !== 'sel-vanchor') return;
+  const isPos = e.target.id === 'sel-vanchor', isSpan = e.target.id === 'sel-anchor';
+  if (!isPos && !isSpan) return;
   const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null;
   if (!c || (c.type !== 'shelf' && c.type !== 'vertical')) return;
-  const a = e.target.value; lastVAnchor = a;
-  const ht = partThick(c) / 2, off = a === 'end' ? ht : a === 'start' ? -ht : 0;
-  const el = $('sel-pos'); if (el) el.value = fmt(c.pos + off);
+  const a = e.target.value;
+  if (isPos) lastVAnchor = a; else lastAnchor = a;
+  seatComp(c, isPos ? 'pos' : 'span', a);
+  render();
+  // The panel isn't rebuilt while the select holds focus, so refresh the numeric fields to the seated values.
+  const posEl = $('sel-pos'); if (posEl) { const ht = partThick(c) / 2, off = lastVAnchor === 'end' ? ht : lastVAnchor === 'start' ? -ht : 0; posEl.value = fmt(c.pos + off); }
+  const lenEl = $('sel-len'); if (lenEl) lenEl.value = fmt(c.a1 - c.a0);
 });
 $('sel-fields').addEventListener('click', (e) => {
   if (e.target.id !== 'sel-door-uncombine') return;
@@ -1993,6 +2262,7 @@ $('btn-load').addEventListener('click', load);
 $('btn-reset').addEventListener('click', reset);
 $('btn-export').addEventListener('click', exportCSV);
 $('btn-pdf').addEventListener('click', exportPDF);
+$('btn-prod').addEventListener('click', exportProductionPack);
 $('unit-mm').addEventListener('click', () => { if (S.unit !== 'mm') { S.unit = 'mm'; syncInputs(); render(); } });
 $('unit-in').addEventListener('click', () => { if (S.unit !== 'in') { S.unit = 'in'; syncInputs(); render(); } });
 window.addEventListener('resize', render);
@@ -2069,7 +2339,7 @@ function aiGetCutList() {
   const areaMM2 = parts.reduce((a, p) => a + p.qty * p.length * p.width, 0);
   const tapeMM = parts.reduce((a, p) => a + p.qty * bandLen(p.key, p.length, p.width), 0);
   return {
-    parts: parts.map(p => ({ name: p.name, qty: p.qty, length: Math.round(p.length), width: Math.round(p.width), edges: bandNotation(p.key) })),
+    parts: parts.map(p => ({ name: p.name, qty: p.qty, width: Math.round(p.w), height: Math.round(p.h), depth: Math.round(p.d), thickness: Math.round(p.thick), edges: bandNotation(p.key) })),
     totals: {
       partCount: parts.reduce((n, p) => n + p.qty, 0),
       boardAreaM2: +(areaMM2 / 1e6).toFixed(3), edgeTapeM: +(tapeMM / 1000).toFixed(2),
@@ -2082,7 +2352,7 @@ function aiGetJobCutList() {
   const parts = jobCutList(), pack = jobNest(), totals = jobTotals();
   return {
     modules: JOB.modules.map((m, i) => ({ index: i, name: m.name || `Module ${i + 1}` })),
-    parts: parts.map(p => ({ name: p.name, qty: p.qty, length: Math.round(p.length), width: Math.round(p.width), edges: p.band })),
+    parts: parts.map(p => ({ name: p.name, qty: p.qty, width: Math.round(p.w), height: Math.round(p.h), depth: Math.round(p.d), thickness: Math.round(p.thick), edges: p.band })),
     totals: {
       partCount: totals.partCount,
       boardAreaM2: +(totals.areaMM2 / 1e6).toFixed(3), edgeTapeM: +(totals.tapeMM / 1000).toFixed(2),
@@ -2156,4 +2426,11 @@ $('scope-module').addEventListener('click', () => setCutScope('module'));
 $('scope-job').addEventListener('click', () => setCutScope('job'));
 
 // ---------- Boot ----------
+// Build tag shown IN THE APP (bottom-right) so anyone can confirm the loaded version without the console.
+const BUILD = 'tape-warn';
+(() => {
+  const el = document.createElement('div'); el.id = 'build-badge'; el.textContent = 'build · ' + BUILD; el.title = 'App build';
+  el.style.cssText = 'position:fixed;right:8px;bottom:6px;z-index:60;font:11px system-ui,sans-serif;color:var(--muted,#9aa3b2);opacity:.55;pointer-events:none;user-select:none';
+  document.body.appendChild(el);
+})();
 buildBandGrid(); renderModuleBar(); syncInputs(); render();
