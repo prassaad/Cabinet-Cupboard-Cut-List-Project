@@ -198,17 +198,18 @@ function normalizeComps() {
     c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi));
   }
 }
-// Panel thickness for a shelf/vertical: its own override (e.g. a 25 mm drawer flank) or the cabinet default.
-const FLANK_T = 25;   // mm — default thickness of the verticals auto-added beside a drawer
+// Panel thickness for a shelf/vertical: its own explicit override or the cabinet default material thickness.
 const partThick = (c) => (c && c.thick != null) ? Math.max(1, c.thick) : S.cab.t;
 // Cell (rectangle) containing point P, bounded by parts whose span crosses P. Excludes excludeId.
 // opts.ignoreShelves / opts.ignoreVerticals let a door span across those dividers (covering several cells).
 function cellAt(px, py, excludeId, opts) {
   const { w, h, t } = S.cab;
   const ignoreShelves = !!(opts && opts.ignoreShelves), ignoreVerticals = !!(opts && opts.ignoreVerticals);
+  const ignoreIds = (opts && opts.ignoreIds) || null;   // e.g. a drawer's own flanks, so its fascia spans past them
   let left = innerL(), right = innerR(), bottom = innerB(), top = innerT();   // panel-aware: reaches the edge where a panel was removed
   for (const c of S.comps) {
     if (c.id === excludeId) continue;
+    if (ignoreIds && ignoreIds.has(c.id)) continue;
     const ht = partThick(c) / 2;
     if (c.type === 'vertical' && !ignoreVerticals && c.a0 <= py && py <= c.a1) {
       if (c.pos <= px) left = Math.max(left, c.pos + ht); else right = Math.min(right, c.pos - ht);
@@ -281,7 +282,7 @@ function doorRects() { const out = []; for (const c of S.comps) if (c.type === '
 
 // ---------- Drawers ----------
 // A drawer component fills the cell at its anchor (bounded by surrounding shelves/verticals) with `count` stacked fronts.
-const DRAWER = { gap: 3, sideClear: 13, boxHeadClear: 40 };   // mm: reveal around fronts, runner clearance per side, box height clearance
+const DRAWER = { gap: 3, sideClear: 12.5, boxHeadClear: 40, fasciaOver: 50 };   // mm: reveal around fronts, telescopic-runner clearance per side, box height clearance, fascia oversize over the drawer height
 // The bank sits inside its cell (bounded by shelves/verticals). Optional w/h shrink it; it is centered horizontally and valign anchors it to the cell top or bottom.
 function drawerRect(c) {
   const cell = cellAt(c.ax, c.ay, null);
@@ -306,9 +307,12 @@ function syncDrawerFlanks(d) {
   // cellAt (which bounds the drawer's width) actually see the flanks. Without this the drawer would ignore
   // flanks that no longer reach its old centre anchor and spill to the full cell width.
   d.ay = (rect.bottom + rect.top) / 2;
+  // An INSET front sits inside the carcass and eats one board thickness of interior depth, so the flanks framing
+  // the box stop a thickness short of the front. Outset (proud) leaves them at full depth (no override).
+  const flankDepth = d.mount === 'inset' ? Math.max(1, usableDepth() - S.cab.t) : null;
   for (const fid of d.flanks) {
     const f = S.comps.find(x => x.id === fid && x.type === 'vertical');
-    if (f) { f.a0 = rect.bottom; f.a1 = rect.top; }
+    if (f) { f.a0 = rect.bottom; f.a1 = rect.top; if (flankDepth != null) f.depth = flankDepth; else delete f.depth; }
   }
 }
 // Per-side reveal gaps around each drawer front (Left/Right/Top/Bottom). Each defaults to half the global
@@ -339,18 +343,56 @@ function drawerFronts(c) {
   }
   return fronts;
 }
+// The full opening a drawer's fascia spans — the cell at its anchor but IGNORING the drawer's own flank
+// verticals, so the visible front covers them (and the reveal gaps) instead of sitting between them.
+function drawerOuterCell(c) {
+  const flanks = Array.isArray(c.flanks) && c.flanks.length ? new Set(c.flanks) : null;
+  return cellAt(c.ax, c.ay, null, flanks ? { ignoreIds: flanks } : null);
+}
+// The decorative fascia panels — the actual VISIBLE face shown in 2D/3D, one rect per stacked drawer. It spans the
+// FULL opening width (drawerOuterCell — over the flanks and reveal gaps, like a shelf) and, per band, is
+// fasciaOver taller than the drawer so it laps the reveal top & bottom. Mirrors the 'Drawer fascia' cut-list part
+// so what you see is what gets cut; the drawer box itself still fits *between* the flanks (drawerRect).
+function drawerFascias(c) {
+  const rect = drawerRect(c), outer = drawerOuterCell(c), n = Math.max(1, c.count | 0);
+  const band = (rect.top - rect.bottom) / n, over = DRAWER.fasciaOver;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const mid = rect.bottom + (i + 0.5) * band, hh = (band + over) / 2;
+    out.push({ x0: outer.left, x1: outer.right, y0: mid - hh, y1: mid + hh });
+  }
+  return out;
+}
+// Front-elevation rects of the drawer-box FRONT wall (one per stacked drawer), for the 3D view. Sits between the
+// box sides (inset from the flanks by the runner clearance + a board thickness) and spans the box height at the
+// bottom of each band — mirroring the 'Drawer front' cut part. Only drawn when the drawer's Box-front is on.
+function drawerBoxFronts(c) {
+  const cell = drawerRect(c), t = S.cab.t, n = Math.max(1, c.count | 0), band = (cell.top - cell.bottom) / n;
+  const x0 = cell.left + DRAWER.sideClear + t, x1 = cell.right - DRAWER.sideClear - t;
+  const boxH = Math.max(1, band - DRAWER.boxHeadClear);
+  const out = [];
+  if (x1 - x0 < 1) return out;
+  for (let i = 0; i < n; i++) { const by0 = cell.bottom + i * band; out.push({ x0, x1, y0: by0, y1: by0 + boxH }); }
+  return out;
+}
 function drawerParts(c) {
-  const t = S.cab.t, cell = drawerRect(c);
-  const Wc = cell.right - cell.left, Hc = cell.top - cell.bottom;
-  const n = Math.max(1, c.count | 0), band = Hc / n, depth = compDepth(c), g = DRAWER.gap;
+  const t = S.cab.t, cell = drawerRect(c), outer = drawerOuterCell(c);
+  const Wc = cell.right - cell.left, Hc = cell.top - cell.bottom, WcFascia = outer.right - outer.left;
+  // An inset front is housed inside the carcass, so it consumes one board thickness of box depth; outset is proud.
+  const depth = Math.max(1, compDepth(c) - (c.mount === 'inset' ? t : 0)), g = DRAWER.gap;
+  const n = Math.max(1, c.count | 0), band = Hc / n;
   const boxOuterW = Math.max(1, Wc - 2 * DRAWER.sideClear), boxInnerW = Math.max(1, boxOuterW - 2 * t);
   const boxH = Math.max(1, band - DRAWER.boxHeadClear);
-  const fronts = drawerFronts(c);
   const parts = [];
   for (let i = 0; i < n; i++) {
-    const f = fronts[i];
     // face maps [length,width] to spatial axes; the third axis carries the board thickness `t`.
-    parts.push({ name: 'Drawer front', key: 'Door', length: Math.max(1, f.y1 - f.y0), width: Math.max(1, f.x1 - f.x0), face: 'HW', t });
+    // The drawer-box FRONT wall is identical to the back — both are box members spanning the inner width × box
+    // height. The visible decorative panel is the separate 'Drawer fascia' below, not this structural front.
+    // Optional: some boxes (metal-runner / modern) use the fascia as the front, so skip it when 'Box front' is off.
+    if (c.boxFront !== false) parts.push({ name: 'Drawer front', key: 'DrawerBox', length: boxInnerW, width: boxH, face: 'WH', t });
+    // Outer decorative fascia — one per drawer front, height = drawer height + a fixed overlay (200 → 250) so it
+    // laps the reveal top & bottom; width follows the opening. Banded like a front (key 'Door').
+    parts.push({ name: 'Drawer fascia', key: 'Door', length: band + DRAWER.fasciaOver, width: WcFascia, face: 'HW', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH, face: 'DH', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: depth, width: boxH, face: 'DH', t });
     parts.push({ name: 'Drawer back', key: 'DrawerBox', length: boxInnerW, width: boxH, face: 'WH', t });
@@ -806,7 +848,7 @@ function drawOverallDims(w, h) {
 
 function drawDrawer2D(c) {
   const sel = c.id === S.selectedId;
-  for (const f of drawerFronts(c)) {
+  for (const f of drawerFascias(c)) {
     const y1 = f.y1, r = { x0: f.x0, x1: f.x1, y0: f.y0, y1 };
     fillRectMM(dctx, r, sel ? 'rgba(255,180,84,0.92)' : D2D.part, sel ? '#ffd9a0' : D2D.partEdge);
     const cx = sx((r.x0 + r.x1) / 2), hy = sy(y1) + 14;          // handle near the top of each front
@@ -899,7 +941,10 @@ function buildBoxes() {
     else if (c.type === 'vertical') for (const s of verticalSegments(c)) push(c.pos - ht, c.pos + ht, s.lo, s.hi, z0, z1, vertCol, c.id);
     else if (c.type === 'drawer') {
       const fz0 = c.mount === 'inset' ? d - t : d, fz1 = fz0 + t;   // inset = flush within the opening; outset = proud of the cabinet face
-      for (const f of drawerFronts(c)) push(f.x0, f.x1, f.y0, f.y1, fz0, fz1, doorCol, c.id);
+      for (const f of drawerFascias(c)) push(f.x0, f.x1, f.y0, f.y1, fz0, fz1, doorCol, c.id);
+      // Structural box front (when opted): a panel just behind the fascia, between the box sides. Hidden behind
+      // the fascia in the closed view but revealed by the explode slider.
+      if (c.boxFront !== false) for (const b of drawerBoxFronts(c)) push(b.x0, b.x1, b.y0, b.y1, fz0 - t, fz0, shelfCol, c.id);
     }
   }
   for (const r of doorRects()) { const z0 = r.mount === 'inset' ? d - t : d; push(r.x0, r.x1, r.y0, r.y1, z0, z0 + t, doorCol, r.id, 0.55); }
@@ -988,7 +1033,11 @@ function renderDesign3D() {
     // overall W / H / D along front edges
     dim3([0, 0, d], [w, 0, d], [0, -OFF, 0], fmtU(w));   // width  — front bottom, below
     dim3([w, 0, d], [w, h, d], [OFF, 0, 0], fmtU(h));    // height — front right, to the right
-    dim3([w, 0, d], [w, 0, 0], [0, -OFF, 0], fmtU(d));   // depth  — right bottom, below
+    dim3([w, 0, d], [w, 0, 0], [0, -OFF, 0], fmtU(d));   // depth  — right bottom, below (carcass depth)
+    // interior/shelf usable depth (carcass depth minus the back recess) — shown on the left bottom edge, inset
+    // from the back, only when a back recess makes it differ from the carcass depth so it never duplicates it.
+    const z0 = backFront(), uDep = d - z0;
+    if (z0 > 0.5 && uDep > 0.5) dim3([0, 0, z0], [0, 0, d], [0, -OFF, 0], fmtU(uDep));
     // opening heights along the front-left edge (mirrors the 2D view, left column)
     if (S.comps.some(c => c.type === 'shelf'))
       for (const cell of enumerateOpenings())
@@ -1199,7 +1248,7 @@ function drawModuleElevation(ctx, m, worldToScreen) {
     if (capOn('top')) fillR({ x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
     const Pe = woodPal();
     for (const c of S.comps) { if (c.type === 'drawer') continue; fillR(partRect(c), Pe.p2d, Pe.e2d); }
-    for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFronts(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, Pe.p2d, Pe.e2d);
+    for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFascias(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, Pe.p2d, Pe.e2d);
     for (const r of doorRects()) fillR({ x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y1 }, 'rgba(190,160,105,0.30)', '#d9c08a');
   });
 }
@@ -1459,14 +1508,18 @@ function addComp(type) {
   const p = S.lastPoint || { x: w / 2, y: h / 2 };
   if (type === 'drawer') {
     const cell = cellAt(p.x, p.y, null);
-    const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount(), valign: 'top', h: 150 };   // defaults: 1 drawer, anchored to top, 150 mm tall
+    const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount(), valign: 'top', h: 150, boxFront: drawerBoxFront() };   // defaults: 1 drawer, anchored to top, 150 mm tall, structural box front on
     const created = [];
     // Optional: frame the drawer with a vertical flank (side panel) on the left and right, sized to the drawer
     // height and linked to it so they track the drawer as it resizes. Toggle via the "Side panels" checkbox.
     if (drawerSidePanels()) {
-      const ft = Math.min(FLANK_T, Math.max(1, (cell.right - cell.left) / 2 - 1));   // never wider than half the opening
-      const left = { id: S._seq++, type: 'vertical', pos: cell.left + ft / 2, a0: cell.bottom, a1: cell.top, thick: ft };
-      const right = { id: S._seq++, type: 'vertical', pos: cell.right - ft / 2, a0: cell.bottom, a1: cell.top, thick: ft };
+      // Flank thickness follows the cabinet material (same as every other panel), only clamped so it never
+      // exceeds half the opening. A `thick` override is stored ONLY when that clamp bites (very narrow opening);
+      // otherwise it is left unset so the flank tracks the cabinet default if the material thickness changes.
+      const ft = Math.min(t, Math.max(1, (cell.right - cell.left) / 2 - 1));
+      const flankThick = ft < t ? { thick: ft } : {};
+      const left = { id: S._seq++, type: 'vertical', pos: cell.left + ft / 2, a0: cell.bottom, a1: cell.top, ...flankThick };
+      const right = { id: S._seq++, type: 'vertical', pos: cell.right - ft / 2, a0: cell.bottom, a1: cell.top, ...flankThick };
       clampComp(left); clampComp(right);
       c.flanks = [left.id, right.id];
       created.push(left, right);
@@ -1490,6 +1543,9 @@ function addComp(type) {
 const drawerCount = () => { const v = parseInt(($('in-drawer-count') || {}).value, 10) || 1; return Math.max(1, Math.min(12, v)); };
 // Side-panels checkbox: when on (default), a new drawer is framed with two flank verticals sized to its height.
 const drawerSidePanels = () => { const el = $('in-drawer-sides'); return el ? !!el.checked : true; };
+// Box-front checkbox: when on (default), the drawer box gets a structural front wall (a 'Drawer front' part, same
+// size as the back, listed in the cut list and drawn in 3D). Off = the fascia is the front, no separate box front.
+const drawerBoxFront = () => { const el = $('in-drawer-front'); return el ? !!el.checked : true; };
 const doorLeaves = () => (parseInt(($('in-door-leaves') || {}).value, 10) === 2 ? 2 : 1);
 function deleteSelected() {
   const id = S.selectedId;
@@ -1577,8 +1633,8 @@ function renderSelectionPanel() {
       row('sel-gap-r', 'Right', fmt(gp.r)) +
       row('sel-gap-t', 'Top', fmt(gp.t)) +
       row('sel-gap-b', 'Bottom', fmt(gp.b));
-    const ff = drawerFronts(comp)[0];
-    derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)}. Bank occupies ${fmtU(off)}–${fmtU(off + H)} up the column · ${n} ${mnt} front(s) ${fmtU(ff.x1 - ff.x0)} × ${fmtU(ff.y1 - ff.y0)} each. From bottom stacks it under a door — no shelf.`;
+    const ff = drawerFascias(comp)[0];
+    derived.textContent = `Cell ${fmtU(cw)} × ${fmtU(ch)}. Bank occupies ${fmtU(off)}–${fmtU(off + H)} up the column · ${n} ${mnt} fascia ${fmtU(ff.x1 - ff.x0)} × ${fmtU(ff.y1 - ff.y0)} each. From bottom stacks it under a door — no shelf.`;
     actions.classList.remove('hidden');
   } else if (comp) {
     const isShelf = comp.type === 'shelf';
@@ -2068,10 +2124,15 @@ function exportProductionPack() {
   const job = isJobScope();   // respect the cut-list Module ⇄ Job toggle: Module = active module only, Job = all modules
   const active = (JOB.active >= 0 && JOB.modules[JOB.active]) ? JOB.modules[JOB.active] : S;
   const mods = job ? JOB.modules : [active];
-  const IMG_W = 540, IMG_H = 380;
+  // Size each capture to the cabinet's own proportions at a steady ~px/mm, so the dimension labels stay as roomy
+  // as the on-screen views instead of being squeezed together — a tall cabinet gets a tall image, a wide one a
+  // wide image. The extra margins leave room for the outside dimension lines (height left, width/depth below).
+  const PXMM = 0.30, clampImg = (v) => Math.max(340, Math.min(1200, Math.round(v)));
   const blocks = mods.map((m, i) => {
-    const img2d = captureDesign(m, '2d', IMG_W, IMG_H);
-    const img3d = captureDesign(m, '3d', IMG_W, IMG_H);
+    const W2 = clampImg(m.cab.w * PXMM + 128), H2 = clampImg(m.cab.h * PXMM + 128);
+    const W3 = clampImg(m.cab.w * PXMM + 220), H3 = clampImg(m.cab.h * PXMM + 170);   // isometric spreads with depth
+    const img2d = captureDesign(m, '2d', W2, H2);
+    const img3d = captureDesign(m, '3d', W3, H3);
     const info = withModule(m, () => {
       const parts = cutList();
       const rows = parts.map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${bandNotation(p.key)}</td></tr>`).join('');
