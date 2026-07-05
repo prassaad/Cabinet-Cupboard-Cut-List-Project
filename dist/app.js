@@ -252,7 +252,11 @@ const doorBase = (c) => c.span ? c.span : cellAt(c.ax, c.ay, null, doorCoverOpts
 function doorSpan(c) {
   const base = doorBase(c), ch = base.top - base.bottom;
   const H = c.h != null ? Math.max(1, Math.min(c.h, ch)) : ch;
-  const off = Math.max(0, Math.min(c.yoff || 0, ch - H));
+  // Vertical anchor (top / middle / bottom) sets the default offset when a partial-height door isn't pinned by an
+  // explicit From-bottom (c.yoff). An explicit yoff always wins.
+  const va = c.valign || 'bottom';
+  const anchoredOff = va === 'top' ? ch - H : va === 'middle' ? (ch - H) / 2 : 0;
+  const off = c.yoff != null ? Math.max(0, Math.min(c.yoff, ch - H)) : anchoredOff;
   const bottom = base.bottom + off;
   return { left: base.left, right: base.right, bottom, top: bottom + H, freeBottom: off > 0.5, freeTop: (ch - off - H) > 0.5 };
 }
@@ -315,6 +319,28 @@ function syncDrawerFlanks(d) {
     if (f) { f.a0 = rect.bottom; f.a1 = rect.top; if (flankDepth != null) f.depth = flankDepth; else delete f.depth; }
   }
 }
+// Add the two flank verticals (side panels) to an existing drawer and link them, sized to the current opening then
+// shrunk to the drawer height by syncDrawerFlanks. No-op if the drawer already has flanks.
+function addDrawerFlanks(c) {
+  if (c.flanks && c.flanks.length) return;
+  const t = S.cab.t, cell = cellAt(c.ax, c.ay, null);
+  const ft = Math.min(t, Math.max(1, (cell.right - cell.left) / 2 - 1));
+  const flankThick = ft < t ? { thick: ft } : {};
+  const left = { id: S._seq++, type: 'vertical', pos: cell.left + ft / 2, a0: cell.bottom, a1: cell.top, ...flankThick };
+  const right = { id: S._seq++, type: 'vertical', pos: cell.right - ft / 2, a0: cell.bottom, a1: cell.top, ...flankThick };
+  clampComp(left); clampComp(right);
+  c.flanks = [left.id, right.id];
+  S.comps.push(left, right);
+  syncDrawerFlanks(c);
+}
+// Remove a drawer's flank verticals and unlink them. The drawer then spans the full opening (only the channel gap
+// each side remains), and 2D / 3D / cut list all follow automatically off the widened drawerRect.
+function removeDrawerFlanks(c) {
+  if (!c.flanks || !c.flanks.length) return;
+  const ids = new Set(c.flanks);
+  for (let i = S.comps.length - 1; i >= 0; i--) if (ids.has(S.comps[i].id)) S.comps.splice(i, 1);
+  delete c.flanks;
+}
 // Per-side reveal gaps around each drawer front (Left/Right/Top/Bottom). Each defaults to half the global
 // reveal so untouched drawers look the same; the drawer editor can override any side to fit the view.
 const drawerGaps = (c) => ({
@@ -343,27 +369,22 @@ function drawerFronts(c) {
   }
   return fronts;
 }
-// The bay a drawer sits in, IGNORING its own flanks — so the fascia can cover them. Bounded by the next structural
-// members (cabinet sides / other dividers) beyond the flanks.
-function drawerOuterCell(c) {
-  const flanks = Array.isArray(c.flanks) && c.flanks.length ? new Set(c.flanks) : null;
-  return cellAt(c.ax, c.ay, null, flanks ? { ignoreIds: flanks } : null);
-}
-// Horizontal extent of a drawer's fascia, by mount:
-//  - inset  → covers the flanks only: spans the bay (drawerOuterCell).
-//  - outset → additionally overlays the cupboard sides, exactly like an overlay door: reach the cabinet outer
-//             face where the bay meets an exterior side, lap half a divider where it meets an interior one.
+// Horizontal extent of a drawer's fascia. Base = the drawer's own cell (cellAt), so it sits BETWEEN the flanks
+// when side panels are on (flanks visible beside it) and widens to the full opening when they're removed.
+//  - inset  → exactly that cell (between the flanks / opening).
+//  - outset → overlays the adjacent member like an overlay door: reach the cabinet outer face where it meets an
+//             exterior side, otherwise lap half the bounding member (a flank when present, else an interior divider).
 function drawerFasciaCell(c) {
-  const bay = drawerOuterCell(c);
-  if (c.mount === 'inset') return bay;
+  const cell = cellAt(c.ax, c.ay, null);
+  if (c.mount === 'inset') return cell;
   const t = S.cab.t, w = S.cab.w, eps = 0.5;
-  const left  = bay.left  <= t + eps     ? 0 : bay.left  - t / 2;
-  const right = bay.right >= w - t - eps ? w : bay.right + t / 2;
-  return { left, right, bottom: bay.bottom, top: bay.top };
+  const left  = cell.left  <= t + eps     ? 0 : cell.left  - t / 2;
+  const right = cell.right >= w - t - eps ? w : cell.right + t / 2;
+  return { left, right, bottom: cell.bottom, top: cell.top };
 }
 // The decorative fascia panels — the actual VISIBLE face shown in 2D/3D, one rect per stacked drawer. Horizontal
-// extent comes from drawerFasciaCell (mount-aware: covers flanks when inset, flanks + cupboard sides when outset);
-// its height is exactly the drawer height (the input) per band. Mirrors the cut-list part.
+// extent comes from drawerFasciaCell (sits between the flanks when side panels are on, widens when removed; outset
+// also overlays the adjacent member); its height is exactly the drawer height (the input) per band.
 function drawerFascias(c) {
   const rect = drawerRect(c), fc = drawerFasciaCell(c), n = Math.max(1, c.count | 0);
   const band = (rect.top - rect.bottom) / n;
@@ -1632,6 +1653,8 @@ function renderSelectionPanel() {
     const cov = comp.covers || 'cell', mnt = doorMount(comp);
     const optC = (v, lbl) => `<option value="${v}"${cov === v ? ' selected' : ''}>${lbl}</option>`;
     const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
+    const dva = comp.valign || 'bottom';
+    const optV = (v, lbl) => `<option value="${v}"${dva === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `Door front <small>(${u})</small>`;
     // A span door (built from picked cells) controls its own region, so the Covers mode doesn't apply.
     const coverRow = comp.span
@@ -1642,6 +1665,7 @@ function renderSelectionPanel() {
       `<label class="sel-row"><span>Leaves</span><select id="sel-leaves"><option value="1"${two ? '' : ' selected'}>1 door</option><option value="2"${two ? ' selected' : ''}>2 doors</option></select></label>` +
       `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset (overlay)')}${optM('inset', 'Inset')}</select></label>` +
       row('sel-h', 'Height', fmt(spanH)) +
+      `<label class="sel-row"><span>Anchor</span><select id="sel-door-valign">${optV('top', 'Top')}${optV('middle', 'Middle')}${optV('bottom', 'Bottom')}</select></label>` +
       row('sel-yoff', 'From bottom', fmt(off)) +
       coverRow;
     const dr = doorRectsFor(comp)[0];
@@ -1663,6 +1687,7 @@ function renderSelectionPanel() {
       `<label class="sel-row"><span>Anchor</span><select id="sel-valign">${opt('top', 'Top')}${opt('bottom', 'Bottom')}</select></label>` +
       row('sel-depth', 'Box depth', fmt(compDepth(comp))) +
       `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset')}${optM('inset', 'Inset')}</select></label>` +
+      `<label class="sel-row"><span>Side panels</span><input id="sel-sides" type="checkbox"${(comp.flanks && comp.flanks.length) ? ' checked' : ''}></label>` +
       `<div class="sel-sub">Front gap (mm)</div>` +
       row('sel-gap-l', 'Left', fmt(gp.l)) +
       row('sel-gap-r', 'Right', fmt(gp.r)) +
@@ -1747,14 +1772,29 @@ function applySelectedEdit() {
     c.count = parseInt(($('sel-leaves') || {}).value, 10) === 2 ? 2 : 1;
     const cov = (($('sel-covers') || {}).value) || 'cell'; if (cov === 'cell') delete c.covers; else c.covers = cov;
     if ((($('sel-mount') || {}).value) === 'inset') c.mount = 'inset'; else delete c.mount;   // outset is the default
-    // Vertical placement: Height (store only when shorter than the opening) + From-bottom offset.
+    // Vertical placement: Anchor (top/middle/bottom) + Height (store only when shorter than the opening) + From-bottom.
+    const prevVA = c.valign || 'bottom';
+    c.valign = (($('sel-door-valign') || {}).value) || 'bottom';
     const ch = doorBase(c).top - doorBase(c).bottom;
     const H = get('sel-h'); if (H > 0 && Math.abs(H - ch) > 0.5) c.h = Math.max(1, Math.min(H, ch)); else delete c.h;
-    const off = get('sel-yoff'), maxOff = ch - (c.h != null ? c.h : ch);
-    if (off > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
+    const bandH = c.h != null ? c.h : ch, maxOff = ch - bandH;
+    const anchoredOff = c.valign === 'top' ? maxOff : c.valign === 'middle' ? maxOff / 2 : 0;
+    if (c.valign !== prevVA) {                       // switching Anchor re-seats the door against the chosen edge
+      delete c.yoff; const yo = $('sel-yoff'); if (yo) yo.value = fmt(anchoredOff);
+    } else {                                         // otherwise keep an explicit From-bottom only when it differs from the anchored position
+      const off = get('sel-yoff');
+      if (off > 0.5 && Math.abs(off - anchoredOff) > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
+    }
     render(); return;
   }
   if (c.type === 'drawer') {
+    // Side-panels toggle handled first: adding/removing the flanks changes the whole opening, so on a state change
+    // we drop any fixed width (let the drawer fill the new space), re-render and return — other fields apply next edit.
+    const wantSides = !!(($('sel-sides') || {}).checked), hasSides = !!(c.flanks && c.flanks.length);
+    if (wantSides !== hasSides) {
+      if (wantSides) addDrawerFlanks(c); else removeDrawerFlanks(c);
+      delete c.w; clampComp(c); syncDrawerFlanks(c); render(); return;
+    }
     const cnt = parseInt(($('sel-count') || {}).value, 10) || 1; c.count = Math.max(1, Math.min(12, cnt));
     const prevVA = c.valign || 'bottom';
     c.valign = (($('sel-valign') || {}).value) || 'bottom';
@@ -2293,6 +2333,17 @@ inDims.addEventListener('change', () => { S.showDims = inDims.checked; render();
 $('btn-add-shelf').addEventListener('click', () => addComp('shelf'));
 $('btn-add-vertical').addEventListener('click', () => addComp('vertical'));
 $('btn-add-drawer').addEventListener('click', () => addComp('drawer'));
+// The header "Side panels" checkbox is the default for NEW drawers AND a live bulk toggle: flipping it adds/removes
+// the flanks on EVERY existing drawer at once (so it always visibly changes the design, no selection required).
+{ const el = $('in-drawer-sides'); if (el) el.addEventListener('change', (e) => {
+  const on = e.target.checked; let changed = false;
+  for (const c of S.comps.filter(x => x.type === 'drawer')) {
+    const has = !!(c.flanks && c.flanks.length);
+    if (on && !has) { addDrawerFlanks(c); delete c.w; clampComp(c); syncDrawerFlanks(c); changed = true; }
+    else if (!on && has) { removeDrawerFlanks(c); delete c.w; clampComp(c); changed = true; }
+  }
+  if (changed) render();
+}); }
 btnDelete.addEventListener('click', deleteSelected);
 $('sel-update').addEventListener('click', applySelectedEdit);
 $('sel-delete').addEventListener('click', deleteSelected);
