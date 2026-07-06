@@ -60,7 +60,7 @@ const DEFAULTS = () => ({
   viewMode: '2d',
   cam: { yaw: -0.65, pitch: 0.5 },
   explode: 0,
-  showDims: false,           // 3D measurement labels — default off, user can switch on per 3D session
+  showDims: false,           // 3D measurement labels — turned ON automatically when you enter the 3D view (setViewMode); user can switch off per session
   zoom: 1, pan: { x: 0, y: 0 },   // 2D view zoom + pan
   zoom3d: 1, pan3d: { x: 0, y: 0 },   // 3D view zoom + screen-space pan
   lastPoint: null,           // mm point used as insertion cell anchor
@@ -2249,7 +2249,7 @@ document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', (
   render();
   renderRoomModuleList();   // show the wall list when entering Room, hide it when leaving
 }));
-function setViewMode(m) { S.viewMode = m; dMeasure = null; if (m === '3d') { S.showDims = false; inDims.checked = false; if (cellMode) setCellMode(false); } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab'; render(); }
+function setViewMode(m) { S.viewMode = m; dMeasure = null; if (m === '3d') { S.showDims = true; inDims.checked = true; if (cellMode) setCellMode(false); } $('v2d').classList.toggle('active', m === '2d'); $('v3d').classList.toggle('active', m === '3d'); designCanvas.style.cursor = cellMode ? 'crosshair' : 'grab'; render(); }
 $('v2d').addEventListener('click', () => setViewMode('2d'));
 $('v3d').addEventListener('click', () => setViewMode('3d'));
 $('btn-measure').addEventListener('click', () => {

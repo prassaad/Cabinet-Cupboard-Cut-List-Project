@@ -176,19 +176,30 @@ body.no-modules .setup-empty { display: block; }
 .view-toggle button.active { background: var(--accent); color: #2a1d02; font-weight: 600; }
 .view-toggle.hidden { display: none; }
 
-.zoom-ctl { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-left: 8px; }
-.zoom-ctl button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; cursor: pointer; font: inherit; line-height: 1; }
-.zoom-ctl button:hover { color: var(--ink); background: #ffffff14; }
-.zoom-ctl button + button { border-left: 1px solid var(--line); }
-.zoom-ctl #zoom-fit { min-width: 46px; text-align: center; }
+/* Floating zoom control: vertical stack pinned bottom-right of the canvas, just above the scale bar. */
+.zoom-ctl { position: absolute; right: 12px; bottom: 46px; z-index: 6; display: flex; flex-direction: column;
+  background: rgba(22,26,33,0.78); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  border: 1px solid var(--line); border-radius: 9px; overflow: hidden; box-shadow: 0 3px 12px rgba(0,0,0,0.4); }
+.zoom-ctl button { border: 0; background: transparent; color: var(--muted); width: 34px; height: 32px; padding: 0;
+  cursor: pointer; font: 600 11px/1 system-ui, sans-serif; display: flex; align-items: center; justify-content: center; }
+.zoom-ctl button:hover { color: var(--ink); background: #ffffff1a; }
+.zoom-ctl button + button { border-top: 1px solid var(--line); }
+.zoom-ctl #zoom-fit { min-width: 34px; }
 .zoom-ctl.hidden { display: none; }
 
-.explode { display: flex; align-items: center; gap: 6px; color: var(--muted); margin-left: 10px; font-size: 12px; white-space: nowrap; }
+.explode { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap;
+  background: rgba(47, 52, 61, 0.72); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; padding: 5px 10px; }
 .explode.hidden { display: none; }
-.explode input[type="range"] { width: 64px; }
+.explode input[type="range"] { width: 64px; accent-color: var(--accent); }
 .explode-ico { font-size: 14px; line-height: 1; opacity: .8; }
+/* Explode as a VERTICAL slider pill, stacked above the zoom control on the right (3D only). accent-color swaps the
+   browser's default blue track/thumb for the theme amber. */
+#explode-wrap { position: absolute; right: 12px; bottom: 152px; z-index: 6; flex-direction: column; gap: 8px; padding: 8px 6px; }
+#explode-wrap .explode-ico { font-size: 15px; opacity: .9; }
+#explode-wrap input[type="range"] { -webkit-appearance: slider-vertical; writing-mode: vertical-lr; width: 8px; height: 84px; accent-color: var(--accent); cursor: ns-resize; }
 /* keep the measure button compact so the ribbon stays on one line */
-.measure-btn { margin-left: 8px; padding: 4px 9px; }
+.measure-btn { padding: 4px 9px; }
 
 /* small toggle switch */
 .switch { position: relative; display: inline-block; width: 30px; height: 16px; }
@@ -205,6 +216,10 @@ body.no-modules .setup-empty { display: block; }
 .band-grid input { margin: 0; }
 
 .canvas-wrap { position: relative; flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-height: 0; }
+/* Floating design tools (measure / dimensions / explode) — top-RIGHT overlay; each child pill shows/hides on its own,
+   so the group is invisible when empty. row-reverse keeps Measure pinned at the right edge (always present in 2D & 3D),
+   with Dim/Explode extending left only when they appear in 3D. */
+#canvas-tools { position: absolute; top: 12px; right: 12px; z-index: 6; display: flex; flex-direction: row-reverse; gap: 8px; align-items: center; }
 canvas.view { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
 canvas.view.active { display: block; }
 #design-canvas { cursor: grab; }
@@ -249,7 +264,7 @@ canvas.view.active { display: block; }
 .room-view-toggle button { background: transparent; border: none; color: var(--muted); font-size: 12px; padding: 4px 12px; border-radius: 6px; cursor: pointer; }
 .room-view-toggle button.active { background: var(--accent); color: #2a1d02; font-weight: 600; }
 .room-view-toggle .rv-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: rgba(255, 255, 255, 0.14); }
-.measure-btn { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+.measure-btn { background: rgba(47, 52, 61, 0.72); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); color: var(--muted); border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
 .measure-btn.hidden { display: none; }
 .measure-btn:hover { color: var(--ink); border-color: var(--accent); }
 .measure-btn.active { background: var(--accent); color: #2a1d02; font-weight: 600; border-color: var(--accent); }

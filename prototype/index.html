@@ -8,7 +8,7 @@
 </head>
 <body class="no-modules">
   <header class="topbar">
-    <h1>Cabinet &amp; Cupboard Cut List <span class="tag">prototype</span></h1>
+    <h1>Cabinet &amp; Cupboard Cut List</h1>
     <div class="top-actions">
       <button id="ai-fab" type="button" title="Design Copilot" aria-label="Open Design Copilot">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -95,11 +95,6 @@
         <button class="tab" data-tab="sheet" type="button">Sheet</button>
         <button class="tab" data-tab="setup" type="button">Setup</button>
         <button class="tab" data-tab="drawer-setup" type="button">Drawer Setup</button>
-        <div class="zoom-ctl hidden" id="zoom-ctl" role="group" aria-label="Zoom">
-          <button id="zoom-out" type="button" title="Zoom out">−</button>
-          <button id="zoom-fit" type="button" title="Fit to view (click to reset)">Fit</button>
-          <button id="zoom-in" type="button" title="Zoom in">+</button>
-        </div>
         <div class="view-toggle" id="view-toggle" role="group" aria-label="View">
           <button id="v2d" class="active" type="button" title="2D view" aria-label="2D view">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -115,12 +110,26 @@
             </svg>
           </button>
         </div>
-        <button id="btn-measure" class="measure-btn hidden" type="button" title="Measure: click two points (snaps to corners)">📏 Measure</button>
-        <label class="explode hidden" id="explode-wrap" title="Explode view"><span class="explode-ico" aria-hidden="true">⤢</span><input id="in-explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
-        <label class="explode hidden" id="dims-wrap" title="Show dimensions">Dim <span class="switch"><input id="in-dims" type="checkbox" checked /><span class="slider"></span></span></label>
       </div>
       <div class="canvas-wrap">
         <canvas id="design-canvas" class="view active"></canvas>
+        <!-- Floating design tools (measure + dimensions), top-right of the canvas — moved off the top bar -->
+        <div id="canvas-tools">
+          <button id="btn-measure" class="measure-btn hidden" type="button" title="Measure: click two points (snaps to corners)">📏 Measure</button>
+          <label class="explode hidden" id="dims-wrap" title="Show dimensions">Dim <span class="switch"><input id="in-dims" type="checkbox" checked /><span class="slider"></span></span></label>
+        </div>
+        <!-- Explode slider (3D only) — vertical, sits above the zoom control on the right -->
+        <label class="explode hidden" id="explode-wrap" title="Explode view"><span class="explode-ico" aria-hidden="true">⤢</span><input id="in-explode" type="range" min="0" max="1" step="0.01" value="0" /></label>
+        <!-- Floating zoom control, bottom-right of the canvas beside the scale bar (Google-Maps style) -->
+        <div class="zoom-ctl hidden" id="zoom-ctl" role="group" aria-label="Zoom">
+          <button id="zoom-in" type="button" title="Zoom in" aria-label="Zoom in">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="6" x2="12" y2="18"/><line x1="6" y1="12" x2="18" y2="12"/></svg>
+          </button>
+          <button id="zoom-fit" type="button" title="Fit to view (click to reset)">Fit</button>
+          <button id="zoom-out" type="button" title="Zoom out" aria-label="Zoom out">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="12" x2="18" y2="12"/></svg>
+          </button>
+        </div>
         <canvas id="room-canvas" class="view"></canvas>
         <!-- Room view: switch between flat elevation and a composed 3D scene -->
         <div id="room-view-toggle" class="room-view-toggle hidden" role="group" aria-label="Room view mode">
