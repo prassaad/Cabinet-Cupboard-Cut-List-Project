@@ -279,6 +279,11 @@ function doorRectsFor(c) {
     y0 = cell.freeBottom ? cell.bottom + g / 2 : ((cell.bottom <= t + eps)     ? 0 : cell.bottom - t / 2);
     y1 = cell.freeTop    ? cell.top    - g / 2 : ((cell.top    >= h - t - eps) ? h : cell.top    + t / 2);
   }
+  // Per-side gap overrides for THIS door (mm): pull each named side in by its own gap (e.g. 1 mm on the left).
+  x0 += Math.max(0, c.gapL || 0); x1 -= Math.max(0, c.gapR || 0);
+  y0 += Math.max(0, c.gapB || 0); y1 -= Math.max(0, c.gapT || 0);
+  if (x1 - x0 < 1) { const m = (x0 + x1) / 2; x0 = m - 0.5; x1 = m + 0.5; }
+  if (y1 - y0 < 1) { const m = (y0 + y1) / 2; y0 = m - 0.5; y1 = m + 0.5; }
   if ((c.count | 0) === 2) { const mid = (x0 + x1) / 2; return [{ x0, x1: mid - g / 2, y0, y1, id: c.id, side: 'L', mount }, { x0: mid + g / 2, x1, y0, y1, id: c.id, side: 'R', mount }]; }
   return [{ x0, x1, y0, y1, id: c.id, side: '1', mount }];
 }
@@ -1545,15 +1550,47 @@ function syncBackUI() {
   $('lbl-back-groove').classList.toggle('hidden', overlay);
   $('lbl-back-setback').classList.toggle('hidden', overlay);
 }
+// Re-fit EVERY existing component to the current carcass after any setup/layout change, so all calculations stay
+// correct: clamp shelf/vertical spans and depth/setback, clamp drawer/door size overrides to their live cells, and
+// re-sync each drawer's linked flanks (span + depth). Call from every setup handler before rendering.
+function resyncComponents() {
+  // Pass 1 — dividers first, so drawer/door cells (which read these) are already up to date in pass 2.
+  for (const c of S.comps) {
+    if (c.type === 'shelf' || c.type === 'vertical') {
+      const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
+      c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi));
+    }
+    if (c.depth != null) c.depth = Math.min(c.depth, S.cab.d);
+    if (c.setback != null) c.setback = Math.min(c.setback, S.cab.d);
+    clampComp(c);
+  }
+  // Pass 2 — re-fit banks: clamp stored Width/Height overrides to the live cell, re-sync flanks to the drawer.
+  for (const c of S.comps) {
+    if (c.type === 'drawer') {
+      const cell = cellAt(c.ax, c.ay, null), cw = cell.right - cell.left, ch = cell.top - cell.bottom;
+      if (c.w != null) c.w = Math.max(1, Math.min(c.w, cw));
+      if (c.h != null) c.h = Math.max(1, Math.min(c.h, ch));
+      syncDrawerFlanks(c);
+    } else if (c.type === 'door') {
+      const ch = doorBase(c).top - doorBase(c).bottom;
+      if (c.h != null) c.h = Math.max(1, Math.min(c.h, ch));
+    }
+  }
+}
 function readInputs() {
+  const oldD = S.cab.d;
   S.cab.w = Math.max(1, toMM(parseFloat(inW.value) || 0)); S.cab.h = Math.max(1, toMM(parseFloat(inH.value) || 0));
   S.cab.d = Math.max(1, toMM(parseFloat(inD.value) || 0)); S.cab.t = Math.max(1, toMM(parseFloat(inT.value) || 0));
   S.cab.back = inBack.checked;
   S.sheet.w = Math.max(1, toMM(parseFloat(inSW.value) || 0)); S.sheet.h = Math.max(1, toMM(parseFloat(inSH.value) || 0));
   S.sheet.kerf = Math.max(0, toMM(parseFloat(inKerf.value) || 0));
-  // caps are loosely coupled — their depth may exceed the cabinet depth, so no clamping here
-  // keep spans inside the (possibly resized) carcass
-  for (const c of S.comps) { if (c.type === 'shelf' || c.type === 'vertical') { const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT(); c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi)); } if (c.depth != null) c.depth = Math.min(c.depth, S.cab.d); if (c.setback != null) c.setback = Math.min(c.setback, S.cab.d); clampComp(c); }
+  // Top/Bottom panel depths follow the cabinet depth: a cap that matched the old depth (including the tracking
+  // null) stays matched to the new one, and its depth field is refreshed so the mm value updates automatically.
+  if (Math.abs(S.cab.d - oldD) > 0.5) {
+    for (const which of ['top', 'bottom']) { const c = S.cab[which]; if (c && c.depth != null && Math.abs(c.depth - oldD) < 0.5) c.depth = null; }
+    inTopDepth.value = fmt(capDepth('top')); inBotDepth.value = fmt(capDepth('bottom'));
+  }
+  resyncComponents();
   render();
 }
 
@@ -1637,6 +1674,7 @@ function carcassPartInfo(id) {
 }
 let lastAnchor = 'center';    // resize anchor for the span field (shelf Width / vertical Height)
 let lastVAnchor = 'center';   // position anchor for the pos field (shelf Height / vertical Position): which face the value refers to
+let doorGapSide = 'l';        // which side the door editor's single Gap field currently edits (l/r/t/b)
 function renderSelectionPanel() {
   const card = $('card-selected'), fields = $('sel-fields'), derived = $('sel-derived'), actions = $('sel-actions'), title = $('sel-title');
   const id = S.selectedId;
@@ -1655,6 +1693,8 @@ function renderSelectionPanel() {
     const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
     const dva = comp.valign || 'bottom';
     const optV = (v, lbl) => `<option value="${v}"${dva === v ? ' selected' : ''}>${lbl}</option>`;
+    const gapKeyOf = (s) => 'gap' + s.toUpperCase();
+    const optG = (v, lbl) => `<option value="${v}"${doorGapSide === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `Door front <small>(${u})</small>`;
     // A span door (built from picked cells) controls its own region, so the Covers mode doesn't apply.
     const coverRow = comp.span
@@ -1667,6 +1707,8 @@ function renderSelectionPanel() {
       row('sel-h', 'Height', fmt(spanH)) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-door-valign">${optV('top', 'Top')}${optV('middle', 'Middle')}${optV('bottom', 'Bottom')}</select></label>` +
       row('sel-yoff', 'From bottom', fmt(off)) +
+      `<label class="sel-row"><span>Gap side</span><select id="sel-gap-side">${optG('l', 'Left')}${optG('r', 'Right')}${optG('t', 'Top')}${optG('b', 'Bottom')}</select></label>` +
+      row('sel-gap-val', 'Gap (mm)', fmt(comp[gapKeyOf(doorGapSide)] || 0)) +
       coverRow;
     const dr = doorRectsFor(comp)[0];
     derived.textContent = `Opening ${fmtU(Wc)} × ${fmtU(Hc)}. Door occupies ${fmtU(off)}–${fmtU(off + spanH)} up the column (front ${fmtU(dr.x1 - dr.x0)} × ${fmtU(dr.y1 - dr.y0)} W×H). Set Height + From bottom to place a drawer below and this door above — no shelf needed.` + bandInfo('Door');
@@ -1785,6 +1827,9 @@ function applySelectedEdit() {
       const off = get('sel-yoff');
       if (off > 0.5 && Math.abs(off - anchoredOff) > 0.5) c.yoff = Math.max(0, Math.min(off, maxOff)); else delete c.yoff;
     }
+    // Per-side gap: the single Gap field applies to whichever side the dropdown shows (doorGapSide). 0 clears it.
+    const gv = get('sel-gap-val'), gk = 'gap' + doorGapSide.toUpperCase();
+    if (gv > 0.5) c[gk] = Math.max(0, gv); else delete c[gk];
     render(); return;
   }
   if (c.type === 'drawer') {
@@ -2295,7 +2340,7 @@ function readBack() {
   S.backPanel.thickness = Math.max(1, toMM(parseFloat(inBackThk.value) || 0));
   S.backPanel.groove = Math.max(0, toMM(parseFloat(inBackGroove.value) || 0));
   S.backPanel.setback = Math.max(0, toMM(parseFloat(inBackSetback.value) || 0));
-  syncBackUI(); render();
+  syncBackUI(); resyncComponents(); render();
 }
 inBackType.addEventListener('change', readBack);
 [inBackThk, inBackGroove, inBackSetback].forEach(el => el.addEventListener('input', readBack));
@@ -2309,15 +2354,15 @@ function readCaps() {
   };
   rd('top', inTopMount, inTopDepth, inTopAnchor);
   rd('bottom', inBotMount, inBotDepth, inBotAnchor);
-  render();
+  resyncComponents(); render();
 }
 [inTopMount, inTopAnchor, inBotMount, inBotAnchor].forEach(el => el.addEventListener('change', readCaps));
 [inTopDepth, inBotDepth].forEach(el => el.addEventListener('input', readCaps));
 // Panel presence toggles (remove / restore). Keep the cap objects so their props survive a round-trip.
-inTopOn.addEventListener('change', () => { (S.cab.top || (S.cab.top = { mount: 'inset', depth: null, anchor: 'back' })).on = inTopOn.checked; syncInputs(); render(); });
-inBotOn.addEventListener('change', () => { (S.cab.bottom || (S.cab.bottom = { mount: 'inset', depth: null, anchor: 'back' })).on = inBotOn.checked; syncInputs(); render(); });
-inSideL.addEventListener('change', () => { S.cab.sideL = inSideL.checked; render(); });
-inSideR.addEventListener('change', () => { S.cab.sideR = inSideR.checked; render(); });
+inTopOn.addEventListener('change', () => { (S.cab.top || (S.cab.top = { mount: 'inset', depth: null, anchor: 'back' })).on = inTopOn.checked; syncInputs(); resyncComponents(); render(); });
+inBotOn.addEventListener('change', () => { (S.cab.bottom || (S.cab.bottom = { mount: 'inset', depth: null, anchor: 'back' })).on = inBotOn.checked; syncInputs(); resyncComponents(); render(); });
+inSideL.addEventListener('change', () => { S.cab.sideL = inSideL.checked; resyncComponents(); render(); });
+inSideR.addEventListener('change', () => { S.cab.sideR = inSideR.checked; resyncComponents(); render(); });
 inGrain.addEventListener('change', () => { S.grainLock = inGrain.checked; render(); });
 if (inWoodTheme) inWoodTheme.addEventListener('change', () => { S.woodTheme = inWoodTheme.value; render(); });
 if (inTapeTh) inTapeTh.addEventListener('change', () => { (S.edgeTape || (S.edgeTape = { thickness: 0.8, width: 25 })).thickness = parseFloat(inTapeTh.value) || 0; render(); });
@@ -2383,6 +2428,14 @@ const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.
 const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
 $('sel-fields').addEventListener('change', liveChange);
+// Door per-side gap: switching the "Gap side" dropdown just refreshes the single Gap field to that side's stored
+// value (the value itself is applied to the selected side by applySelectedEdit). Runs after liveChange above.
+$('sel-fields').addEventListener('change', (e) => {
+  if (e.target.id !== 'sel-gap-side') return;
+  doorGapSide = e.target.value;
+  const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null;
+  const el = $('sel-gap-val'); if (el && c) el.value = fmt(c['gap' + doorGapSide.toUpperCase()] || 0);
+});
 // The shelf/vertical anchor dropdowns are seating commands: changing one snaps the part to that side/end of its
 // opening (like the drawer's Top/Bottom). Position anchor seats it across the opening; Height/Width anchor seats
 // the resizable span along it. The numeric Position/Height fields still fine-tune from the seated position.
