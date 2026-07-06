@@ -39,8 +39,8 @@
         <div class="btn-row drawer-row">
           <button id="btn-add-drawer" type="button">+ Drawers</button>
           <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="1" /></label>
-          <label class="chk" title="Frame the drawer with a side panel (flank) on each side, sized to the drawer height. Uncheck to add the drawer only."><input id="in-drawer-sides" type="checkbox" checked /> Side panels</label>
-          <label class="chk" title="Give the drawer box a structural front wall (same size as the back). Uncheck if the fascia itself is the drawer front (metal-runner / modern boxes)."><input id="in-drawer-front" type="checkbox" checked /> Box front</label>
+          <label class="chk" title="Frame the drawer with a side panel (flank) on each side, sized to the drawer height. Uncheck to add the drawer only."><input id="in-drawer-sides" type="checkbox" /> Side panels</label>
+          <label class="chk" title="Give the drawer box a structural front wall (same size as the back). Uncheck if the fascia itself is the drawer front (metal-runner / modern boxes)."><input id="in-drawer-front" type="checkbox" /> Box front</label>
         </div>
         <details class="hint-help">
           <summary>How this works</summary>
@@ -94,6 +94,7 @@
         <button class="tab" data-tab="room" type="button">Room</button>
         <button class="tab" data-tab="sheet" type="button">Sheet</button>
         <button class="tab" data-tab="setup" type="button">Setup</button>
+        <button class="tab" data-tab="drawer-setup" type="button">Drawer Setup</button>
         <div class="zoom-ctl hidden" id="zoom-ctl" role="group" aria-label="Zoom">
           <button id="zoom-out" type="button" title="Zoom out">−</button>
           <button id="zoom-fit" type="button" title="Fit to view (click to reset)">Fit</button>
@@ -254,6 +255,56 @@
               </label>
               <div id="band-grid" class="band-grid"></div>
               <p class="hint">Tick the edges to band per part — edges are named as on the part (Front/Back are the long visible edges; the ends butt into the carcass). Thickness is subtracted from the raw cut size on those edges (finished size fills the opening); width is the roll to buy — keep it ≥ the material thickness so it covers the edge.</p>
+            </section>
+          </div>
+        </div>
+
+        <div id="drawer-setup-view" class="view setup-view">
+          <p class="setup-empty" id="drawer-setup-empty">No module selected. Click <b>+ New</b> above to add one, then set the default drawer here.</p>
+          <p class="setup-intro">Default standard drawer for this module. New drawers are inserted with these values; changing them recalculates every drawer in the module. Select a drawer in the Design view to fine-tune one on its own.</p>
+          <div class="setup-grid">
+            <section class="card">
+              <h2>Sizes <small class="unit-label">(mm)</small></h2>
+              <label>Height <input id="in-dw-height" type="number" min="1" step="1" /></label>
+              <label>Width <input id="in-dw-width" type="number" min="0" step="1" placeholder="fills opening" /></label>
+              <label>Depth <input id="in-dw-depth" type="number" min="0" step="1" placeholder="cabinet depth" /></label>
+              <label>Material thickness <input id="in-dw-thick" type="number" min="0" step="1" placeholder="cabinet material" /></label>
+              <p class="hint">Height is the drawer box height. Leave Width, Depth or Material thickness blank to follow the opening / cabinet defaults.</p>
+            </section>
+
+            <section class="card">
+              <h2>Back panel <small class="unit-label">(mm)</small></h2>
+              <label>Fixing
+                <select id="in-dw-back-type">
+                  <option value="groove">Groove / dado</option>
+                  <option value="rabbet">Rabbet / rebate</option>
+                  <option value="overlay">Full overlay</option>
+                </select>
+              </label>
+              <label>Back thickness <input id="in-dw-back-thk" type="number" min="1" step="1" /></label>
+              <label id="lbl-dw-back-groove">Groove / rebate depth <input id="in-dw-back-groove" type="number" min="0" step="1" /></label>
+              <label id="lbl-dw-back-setback">Setback from rear <input id="in-dw-back-setback" type="number" min="0" step="1" /></label>
+              <p class="hint">Overlay = full panel on the rear. Groove/rabbet = inset panel housed in the box; depth = how far it sits into the groove, setback = how far it's recessed from the back.</p>
+            </section>
+
+            <section class="card">
+              <h2>Bottom panel <small class="unit-label">(mm)</small></h2>
+              <label class="checkbox"><input id="in-dw-bot-on" type="checkbox" checked /> Include bottom panel</label>
+              <label>Bottom mount
+                <select id="in-dw-bot-mount">
+                  <option value="inset">Inset (between sides)</option>
+                  <option value="outset">Outset (caps over sides)</option>
+                </select>
+              </label>
+              <label>Bottom depth <input id="in-dw-bot-depth" type="number" min="0" step="1" placeholder="box depth" /></label>
+              <label>Bottom anchor
+                <select id="in-dw-bot-anchor">
+                  <option value="back">Back</option>
+                  <option value="center">Center</option>
+                  <option value="front">Front</option>
+                </select>
+              </label>
+              <p class="hint">Inset = panel sits between the sides; Outset = panel caps over the sides. Leave a depth blank to match the box depth; anchor places a shallower panel against the back, front or centre. Cut list updates automatically.</p>
             </section>
           </div>
         </div>
