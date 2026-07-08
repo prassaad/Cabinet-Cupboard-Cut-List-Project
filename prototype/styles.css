@@ -216,6 +216,7 @@ body.no-modules .setup-empty { display: block; }
 .band-grid input { margin: 0; }
 
 .canvas-wrap { position: relative; flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-height: 0; }
+#design-canvas { outline: none; }   /* focusable (tabindex) so Space-to-pan works, but no focus ring */
 /* Floating design tools (measure / dimensions / explode) — top-RIGHT overlay; each child pill shows/hides on its own,
    so the group is invisible when empty. row-reverse keeps Measure pinned at the right edge (always present in 2D & 3D),
    with Dim/Explode extending left only when they appear in 3D. */

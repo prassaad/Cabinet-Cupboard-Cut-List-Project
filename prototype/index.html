@@ -40,11 +40,11 @@
           <button id="btn-add-drawer" type="button">+ Drawers</button>
           <label class="qty">× <input id="in-drawer-count" type="number" min="1" max="12" step="1" value="1" /></label>
           <label class="chk" title="Frame the drawer with a side panel (flank) on each side, sized to the drawer height. Uncheck to add the drawer only."><input id="in-drawer-sides" type="checkbox" /> Side panels</label>
-          <label class="chk" title="Give the drawer box a structural front wall (same size as the back). Uncheck if the fascia itself is the drawer front (metal-runner / modern boxes)."><input id="in-drawer-front" type="checkbox" /> Box front</label>
+          <label class="chk" title="Give the drawer box a structural front side wall (same size as the back side). Uncheck if the fascia itself is the drawer front (metal-runner / modern boxes)."><input id="in-drawer-front" type="checkbox" checked /> Front Side</label>
         </div>
         <details class="hint-help">
           <summary>How this works</summary>
-          <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D: click a face to select, left-drag orbits, right-drag or Shift+drag pans, scroll to zoom.</p>
+          <p class="hint">New parts are inserted into the cell you last clicked, bounded by surrounding shelves/verticals. Drag to move within that cell. In 3D: click a face to select, left-drag orbits, right-drag or Space+drag pans, scroll to zoom.</p>
         </details>
 
         <h3 class="sub">Doors / fronts</h3>
@@ -112,7 +112,7 @@
         </div>
       </div>
       <div class="canvas-wrap">
-        <canvas id="design-canvas" class="view active"></canvas>
+        <canvas id="design-canvas" class="view active" tabindex="0"></canvas>
         <!-- Floating design tools (measure + dimensions), top-right of the canvas — moved off the top bar -->
         <div id="canvas-tools">
           <button id="btn-measure" class="measure-btn hidden" type="button" title="Measure: click two points (snaps to corners)">📏 Measure</button>
@@ -282,7 +282,7 @@
             </section>
 
             <section class="card">
-              <h2>Back panel <small class="unit-label">(mm)</small></h2>
+              <h2>Bottom panel <small class="unit-label">(mm)</small></h2>
               <label>Fixing
                 <select id="in-dw-back-type">
                   <option value="groove">Groove / dado</option>
@@ -290,30 +290,23 @@
                   <option value="overlay">Full overlay</option>
                 </select>
               </label>
-              <label>Back thickness <input id="in-dw-back-thk" type="number" min="1" step="1" /></label>
+              <label>Bottom thickness <input id="in-dw-back-thk" type="number" min="1" step="1" /></label>
               <label id="lbl-dw-back-groove">Groove / rebate depth <input id="in-dw-back-groove" type="number" min="0" step="1" /></label>
-              <label id="lbl-dw-back-setback">Setback from rear <input id="in-dw-back-setback" type="number" min="0" step="1" /></label>
-              <p class="hint">Overlay = full panel on the rear. Groove/rabbet = inset panel housed in the box; depth = how far it sits into the groove, setback = how far it's recessed from the back.</p>
+              <label id="lbl-dw-back-setback">Setback from bottom <input id="in-dw-back-setback" type="number" min="0" step="1" /></label>
+              <p class="hint">The drawer base. Overlay = full panel under the box. Groove/rabbet = panel housed in the walls; depth = how far it sits into the groove, setback = the groove height above the bottom edge.</p>
             </section>
 
             <section class="card">
-              <h2>Bottom panel <small class="unit-label">(mm)</small></h2>
-              <label class="checkbox"><input id="in-dw-bot-on" type="checkbox" checked /> Include bottom panel</label>
-              <label>Bottom mount
+              <h2>Back panel <small class="unit-label">(mm)</small></h2>
+              <label class="checkbox"><input id="in-dw-bot-on" type="checkbox" checked /> Include back panel</label>
+              <label>Back mount
                 <select id="in-dw-bot-mount">
                   <option value="inset">Inset (between sides)</option>
-                  <option value="outset">Outset (caps over sides)</option>
+                  <option value="outset">Outset (over sides)</option>
                 </select>
               </label>
-              <label>Bottom depth <input id="in-dw-bot-depth" type="number" min="0" step="1" placeholder="box depth" /></label>
-              <label>Bottom anchor
-                <select id="in-dw-bot-anchor">
-                  <option value="back">Back</option>
-                  <option value="center">Center</option>
-                  <option value="front">Front</option>
-                </select>
-              </label>
-              <p class="hint">Inset = panel sits between the sides; Outset = panel caps over the sides. Leave a depth blank to match the box depth; anchor places a shallower panel against the back, front or centre. Cut list updates automatically.</p>
+              <label>Setback from rear <input id="in-dw-bot-setback" type="number" min="0" step="1" /></label>
+              <p class="hint">The rear wall of the drawer box. Inset = between the sides; Outset = capping over them. Setback from rear = how far it's recessed forward from the back of the box.</p>
             </section>
           </div>
         </div>
