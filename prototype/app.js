@@ -354,7 +354,7 @@ const drawerCapState = (c, which) => {
   return ds && ds.caps && ds.caps[which] ? ds.caps[which] : fallback;
 };
 const drawerCapOn = (c, which) => drawerCapState(c, which).on !== false;
-const drawerCapMount = (c, which) => drawerCapState(c, which).mount || 'inset';
+const drawerCapMount = (c, which) => drawerCapState(c, which).mount || 'outset';   // back side defaults to outset
 const drawerCapDepth = (c, which) => {
   const cap = drawerCapState(c, which);
   return cap.depth != null && cap.depth > 0 ? cap.depth : drawerSizeDepth(c) != null ? drawerSizeDepth(c) : compDepth(c);
@@ -499,15 +499,19 @@ function drawerBox3D(c) {
   // The sides + bottom run BETWEEN the back side and the front side (the fascia is a SEPARATE front panel, flush at the
   // cabinet face for inset / proud for outset — it is NOT between the sides). So their depth = box depth net of the
   // front side + back side thicknesses and the rear setback; everything touches so there is no gap.
-  const zSideRear = zRear + (backOn ? t : 0);          // sides sit against the back side's front face
+  const zSideRear = zRear + (backOn ? t : 0);          // clear span: sides sit against the back side's front face
   const zSideFront = zFront - (frontOn ? t : 0);       // ... and against the front side's rear face (or the fascia)
+  const grR = backOn ? bgroove : 0, grF = frontOn ? bgroove : 0;   // bottom's dado tabs lapping INTO the front/back grooves
   for (let i = 0; i < n; i++) {
     const y0 = cell.bottom + i * band + yRise, y1 = y0 + boxH;   // seated in the middle of the band, runner gap beneath
     if (frontOn) out.push({ part: 'front', x0: bx0, x1: bx1, y0, y1, z0: zFront - t, z1: zFront });   // front side, directly behind the fascia
+    // Sides BUTT against the front/back (no dado) — plain clear span.
     out.push({ part: 'left',  x0: bx0, x1: bx0 + t, y0, y1, z0: zSideRear, z1: zSideFront });
     out.push({ part: 'right', x0: bx1 - t, x1: bx1, y0, y1, z0: zSideRear, z1: zSideFront });
     const yb0 = y0 + bRise;   // grooved bottom raised off the box floor
-    out.push({ part: 'bottom', x0: botOverlay ? bx0 : bx0 + bgroove, x1: botOverlay ? bx1 : bx1 - bgroove, y0: yb0, y1: yb0 + tbot, z0: botOverlay ? zSideRear : zSideRear + bgroove, z1: botOverlay ? zSideFront : zSideFront - bgroove });
+    // Bottom sits BETWEEN the walls and EXTENDS into their grooves — laps into the sides by `bgroove` (x) and into the
+    // front/back by `bgroove` (z). Overlay bottoms cover the full footprint.
+    out.push({ part: 'bottom', x0: botOverlay ? bx0 : bx0 + t - bgroove, x1: botOverlay ? bx1 : bx1 - t + bgroove, y0: yb0, y1: yb0 + tbot, z0: botOverlay ? zSideRear : zSideRear - grR, z1: botOverlay ? zSideFront : zSideFront + grF });
     if (backOn) out.push({ part: 'back', x0: backX.x0, x1: backX.x1, y0, y1, z0: zRear, z1: zRear + t });
   }
   return out;
@@ -525,11 +529,14 @@ function drawerParts(c) {
   const frontOn = c.boxFront !== false, backOn = drawerCapOn(c, 'bottom');
   const rearSb = backOn ? Math.max(0, Math.min(drawerBackRearSetback(c), depth - t)) : 0;
   const boxDepth = Math.max(1, depth - rearSb);   // front-to-back depth net of the rear setback
-  // The sides + bottom run BETWEEN the back side and the front side (the fascia is a separate front panel, not between
-  // the sides), so their depth = box depth net of the front side + back side thicknesses — recomputed live per part.
-  const sideDepth = Math.max(1, boxDepth - (frontOn ? t : 0) - (backOn ? t : 0));
-  const botGroove = drawerBackType(c) === 'overlay' ? 0 : drawerBackGroove(c);
-  const bottomW = Math.max(1, boxOuterW - 2 * botGroove);
+  const botOverlay = drawerBackType(c) === 'overlay', botGroove = botOverlay ? 0 : drawerBackGroove(c);
+  // The SIDES butt against the front & back (no dado) → their depth is the plain clear span between the front/back inner
+  // faces: overall box depth − rear setback − front side − back side (fascia already removed via depth for inset). The
+  // BOTTOM is grooved all round, so it EXTENDS into the grooves (clear + groove depth per grooved edge).
+  const sideDepth = Math.max(1, boxDepth - (frontOn ? t : 0) - (backOn ? t : 0));   // e.g. 535−18(fascia)−15(setback)−18−18 = 466
+  const grExt = (frontOn ? botGroove : 0) + (backOn ? botGroove : 0);   // bottom's groove tabs into the front + back
+  const bottomW = Math.max(1, botOverlay ? boxOuterW : boxInnerW + 2 * botGroove);   // into the side grooves
+  const bottomD = Math.max(1, botOverlay ? sideDepth + 2 * t : sideDepth + grExt);    // into the front/back grooves (side clear + 2×groove)
   const backWallW = drawerCapMount(c, 'bottom') === 'outset' ? boxOuterW : boxInnerW;
   // Front side + back side group into one "Drawer front / back" row (qty 2) when both are present and identical (the
   // default outset back makes them the same size) — like the cabinet Top/Bottom — otherwise they are listed separately.
@@ -543,8 +550,8 @@ function drawerParts(c) {
     parts.push({ name: 'Drawer fascia', key: 'Door', length: band, width: WcFascia, face: 'HW', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: sideDepth, width: boxH, face: 'DH', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: sideDepth, width: boxH, face: 'DH', t });
-    // The grooved BOTTOM (base) — always present; horizontal panel spanning the same depth as the sides, its own thickness.
-    parts.push({ name: 'Drawer bottom', key: 'DrawerBox', length: bottomW, width: sideDepth, face: 'WD', t: drawerBackThickness(c) });
+    // The grooved BOTTOM (base) — always present; sits in the wall grooves, so it is wider/deeper than the clear inner box.
+    parts.push({ name: 'Drawer bottom', key: 'DrawerBox', length: bottomW, width: bottomD, face: 'WD', t: drawerBackThickness(c) });
   }
   return parts;
 }
@@ -1715,7 +1722,7 @@ function readDrawerSetup() {
   ds.backPanel.groove = Math.max(0, toMM(parseFloat(inDwBackGroove.value) || 0));
   ds.backPanel.setback = Math.max(0, toMM(parseFloat(inDwBackSetback.value) || 0));
   // Back Panel card → the rear wall (caps.bottom): include + mount + setback-from-rear (depth/anchor no longer used).
-  const back = ds.caps.bottom || (ds.caps.bottom = { on: true, mount: 'inset', setback: 15 });
+  const back = ds.caps.bottom || (ds.caps.bottom = { on: true, mount: 'outset', setback: 15 });
   back.on = !!inDwBotOn.checked;
   back.mount = inDwBotMount.value === 'outset' ? 'outset' : 'inset';
   back.setback = Math.max(0, toMM(parseFloat(inDwBotSetback.value) || 0));
@@ -1779,7 +1786,7 @@ function addComp(type) {
     if (setup.size.width != null && setup.size.width > 0) seedExtra.w = setup.size.width;
     if (setup.size.depth != null && setup.size.depth > 0) seedExtra.depth = setup.size.depth;
     if (setup.size.thickness != null && setup.size.thickness > 0) seedExtra.thick = setup.size.thickness;
-    const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount(), valign: 'top', h: seedH, boxFront: drawerBoxFront(), drawerSetup: setup, ...seedExtra };   // defaults: 1 drawer, anchored to top; side panels + box front follow the (default-off) header checkboxes; sizes from the module drawer setup
+    const c = { id: S._seq++, type: 'drawer', ax: (cell.left + cell.right) / 2, ay: (cell.bottom + cell.top) / 2, count: drawerCount(), valign: 'top', mount: 'inset', h: seedH, boxFront: drawerBoxFront(), drawerSetup: setup, ...seedExtra };   // defaults: 1 drawer, anchored to top; front (fascia) INSET, back mount outset (from setup); sizes from the module drawer setup
     const created = [];
     // Optional: frame the drawer with a vertical flank (side panel) on the left and right, sized to the drawer
     // height and linked to it so they track the drawer as it resizes. Toggle via the "Side panels" checkbox.
@@ -2079,7 +2086,7 @@ function applySelectedEdit() {
     const backThk = get('sel-drawer-back-thk'); ds.backPanel.thickness = backThk > 0.5 ? Math.max(1, backThk) : 6;
     const backGroove = get('sel-drawer-back-groove'); ds.backPanel.groove = backGroove > 0.5 ? Math.max(0, backGroove) : 0;
     const backSetback = get('sel-drawer-back-setback'); ds.backPanel.setback = backSetback > 0.5 ? Math.max(0, backSetback) : 0;
-    if (!ds.caps.bottom) ds.caps.bottom = { on: true, mount: 'inset', setback: 15 };
+    if (!ds.caps.bottom) ds.caps.bottom = { on: true, mount: 'outset', setback: 15 };
     delete ds.caps.top;   // drawer has no top panel (open box); drop any stale value from older saves
     ds.caps.bottom.on = !!(($('sel-drawer-bottom-on') || {}).checked);   // caps.bottom = the rear BACK wall now
     ds.caps.bottom.mount = (($('sel-drawer-bottom-mount') || {}).value) === 'outset' ? 'outset' : 'inset';
