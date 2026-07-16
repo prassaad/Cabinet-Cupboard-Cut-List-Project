@@ -1,0 +1,9 @@
+{
+  "name": "wallview-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WallView cut-list engine — serverless (Vercel). Runs the real designer app.js headless behind /compute and /edit.",
+  "engines": {
+    "node": ">=18"
+  }
+}
