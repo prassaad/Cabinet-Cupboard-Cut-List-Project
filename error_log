@@ -1,0 +1,12 @@
+[16-Jul-2026 12:35:25 America/Chicago] PHP Fatal error:  Uncaught PDOException: SQLSTATE[HY000] [1045] Access denied for user 'a920363_wallview'@'localhost' (using password: NO) in /home1/a920363/wallview.standscale.com/_core/src/Security/Db/Connection.php:35
+Stack trace:
+#0 /home1/a920363/wallview.standscale.com/_core/src/Security/Db/Connection.php(35): PDO->__construct('mysql:host=loca...', 'a920363_wallvie...', Object(SensitiveParameterValue), Array)
+#1 /home1/a920363/wallview.standscale.com/_core/src/Security/Db/Connection.php(47): Standscale\Security\Db\Connection->pdo()
+#2 /home1/a920363/wallview.standscale.com/_core/src/Security/Db/Connection.php(55): Standscale\Security\Db\Connection->run('SELECT * FROM t...', Array)
+#3 /home1/a920363/wallview.standscale.com/_core/src/SaasCore/Repository/TenantRepository.php(42): Standscale\Security\Db\Connection->first('SELECT * FROM t...', Array)
+#4 /home1/a920363/wallview.standscale.com/_core/src/SaasCore/Repository/TenantRepository.php(47): Standscale\SaasCore\Repository\TenantRepository->findBySubdomain('sky')
+#5 /home1/a920363/wallview.standscale.com/install_web.php(61): Standscale\SaasCore\Repository\TenantRepository->subdomainTaken('sky')
+#6 {main}
+  thrown in /home1/a920363/wallview.standscale.com/_core/src/Security/Db/Connection.php on line 35
+[16-Jul-2026 12:51:23 America/Chicago] [wallview-api] SQLSTATE[HY000] [1045] Access denied for user 'a920363_wallview'@'localhost' (using password: NO) @ /home1/a920363/wallview.standscale.com/_core/src/Security/Db/Connection.php:35
+[16-Jul-2026 12:51:44 America/Chicago] [wallview-api] SQLSTATE[HY000] [1045] Access denied for user 'a920363_wallview'@'localhost' (using password: NO) @ /home1/a920363/wallview.standscale.com/_core/src/Security/Db/Connection.php:35

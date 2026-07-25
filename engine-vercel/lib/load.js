@@ -253,6 +253,11 @@ function loadEngine(appSrc) {
         }
         default: throw new Error('unknown op: ' + op);
       }
+      // After any geometry edit, re-clamp all dividers to live cells AND re-sync each
+      // drawer's linked flanks (side panels) — matches what every prototype setup
+      // handler does. Without this, moving/deleting a shelf shifts a drawer's cell but
+      // leaves its flank verticals behind. Skip for pure module-structure ops.
+      if (['add_module', 'delete_module', 'rename_module'].indexOf(op) < 0 && typeof resyncComponents === 'function') resyncComponents();
       var d = JSON.parse(JSON.stringify(JOB));
       return { design: d, model: __compute(d, { scope: scope, render: true }) };
     }

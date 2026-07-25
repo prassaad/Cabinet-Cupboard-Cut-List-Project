@@ -309,7 +309,7 @@ function doorRects() { const out = []; for (const c of S.comps) if (c.type === '
 
 // ---------- Drawers ----------
 // A drawer component fills the cell at its anchor (bounded by surrounding shelves/verticals) with `count` stacked fronts.
-const DRAWER = { gap: 3, sideClear: 13, boxHeightRatio: 0.5, runnerClearRatio: 0.25 };   // mm + ratios: reveal around fronts, channel/runner gap per side (flank-inner to box side); box (sides + back) height = 50% of the drawer height, seated in the middle of the fascia with 25% runner clearance beneath (remaining 25% above)
+const DRAWER = { gap: 3, sideClear: 13, boxHeightRatio: 0.5, runnerClearRatio: 0.25, fasciaClear: 2 };   // mm + ratios: reveal around fronts, channel/runner gap per side (flank-inner to box side); box (sides + back) height = 50% of the drawer height, seated in the middle of the fascia with 25% runner clearance beneath (remaining 25% above); fasciaClear = 2 mm reveal trimmed off EVERY side of EVERY fascia (inset & outset) so drawers get their running gap and never rub
 // NOTE on roles: `backPanel` holds the grooved-panel settings shown in the "Bottom Panel" card and BUILDS THE BOTTOM
 // (its setback = groove height from the box floor). `caps.bottom` holds the settings shown in the "Back Panel" card and
 // BUILDS THE REAR WALL (its setback = recess from the rear, default 15). The object keys are kept for save compatibility.
@@ -366,8 +366,12 @@ const drawerBackRearSetback = (c) => { const cap = drawerCapState(c, 'bottom'); 
 function drawerRect(c) {
   const cell = cellAt(c.ax, c.ay, null);
   const cw = cell.right - cell.left, ch = cell.top - cell.bottom;
-  const requestedW = c.w != null ? c.w : drawerSizeWidth(c);
-  const requestedH = c.h != null ? c.h : drawerSizeHeight(c);
+  // Setup size is authoritative (as with depth/thickness, the Drawer Setup tab, and
+  // the per-drawer panel); c.w/c.h are only fallbacks, applied inside the helpers.
+  // Reading c.w/c.h first here shadowed edits to drawerSetup.size, so height/width
+  // changes never took effect.
+  const requestedW = drawerSizeWidth(c);
+  const requestedH = drawerSizeHeight(c);
   const W = requestedW != null ? Math.max(1, Math.min(requestedW, cw)) : cw;
   const H = requestedH != null ? Math.max(1, Math.min(requestedH, ch)) : ch;
   let left = cell.left + (cw - W) / 2;
@@ -394,6 +398,35 @@ function syncDrawerFlanks(d) {
   for (const fid of d.flanks) {
     const f = S.comps.find(x => x.id === fid && x.type === 'vertical');
     if (f) { f.a0 = rect.bottom; f.a1 = rect.top; if (flankDepth != null) f.depth = flankDepth; else delete f.depth; }
+  }
+}
+// Every drawer component anchored inside `cell`, ordered TOP-DOWN — the visual stacking order, so a repack keeps
+// the drawers where the user sees them. Drawers sharing an opening stay separate components; this is what lets a
+// newly inserted one find its neighbours instead of landing on top of them.
+function drawersInCell(cell) {
+  return S.comps
+    .filter(x => x.type === 'drawer'
+      && x.ax > cell.left && x.ax < cell.right && x.ay > cell.bottom && x.ay < cell.top)
+    .sort((a, b) => b.ay - a.ay);
+}
+// Re-fit a stack of SEPARATE drawers so they exactly share one opening, top to bottom with no overlap and no gap.
+// The opening is divided by the total number of fronts (a drawer carrying count>1 takes that many shares), so
+// inserting or removing a drawer rescales every drawer in the opening. Each drawer keeps its own identity and
+// settings — only its height and vertical position are rewritten; fascia, band and every box member then recompute
+// off drawerRect as usual. `yoff` (not valign) pins each one, since only an explicit offset can seat a mid-stack drawer.
+function packDrawerStack(cell, list) {
+  if (!list || !list.length) return;
+  const ch = cell.top - cell.bottom;
+  const shares = list.reduce((s, d) => s + Math.max(1, d.count | 0), 0);
+  const unit = ch / shares;
+  let top = cell.top;
+  for (const d of list) {
+    const hgt = unit * Math.max(1, d.count | 0), bottom = top - hgt;
+    d.h = hgt; drawerSetup(d).size.height = hgt;   // setup size is authoritative, so write both
+    d.yoff = bottom - cell.bottom;
+    d.ay = bottom + hgt / 2;                       // keep the anchor inside its own band (cellAt reads it)
+    clampComp(d); syncDrawerFlanks(d);             // linked side panels follow each drawer's new band
+    top = bottom;
   }
 }
 // Add the two flank verticals (side panels) to an existing drawer and link them, sized to the current opening then
@@ -465,10 +498,13 @@ function drawerFasciaCell(c) {
 function drawerFascias(c) {
   const rect = drawerRect(c), fc = drawerFasciaCell(c), n = Math.max(1, c.count | 0);
   const band = (rect.top - rect.bottom) / n;
+  const cl = DRAWER.fasciaClear;   // trim 2 mm off every side (L/R/T/B) of every fascia so each drawer clears its neighbours & the opening
   const out = [];
   for (let i = 0; i < n; i++) {
     const mid = rect.bottom + (i + 0.5) * band, hh = band / 2;
-    out.push({ x0: fc.left, x1: fc.right, y0: mid - hh, y1: mid + hh });
+    let x0 = fc.left + cl, x1 = fc.right - cl;   if (x1 - x0 < 1) { const m = (fc.left + fc.right) / 2; x0 = m - 0.5; x1 = m + 0.5; }
+    let y0 = mid - hh + cl, y1 = mid + hh - cl;  if (y1 - y0 < 1) { y0 = mid - 0.5; y1 = mid + 0.5; }
+    out.push({ x0, x1, y0, y1 });
   }
   return out;
 }
@@ -547,7 +583,9 @@ function drawerParts(c) {
     if (frontOn) parts.push({ name: fbGroup ? 'Drawer front / back' : 'Drawer front side', key: 'DrawerBox', length: boxOuterW, width: boxH, face: 'WH', t });
     if (backOn)  parts.push({ name: fbGroup ? 'Drawer front / back' : 'Drawer back side',  key: 'DrawerBox', length: backWallW, width: boxH, face: 'WH', t });
     // Outer decorative fascia — one per drawer front; height = the drawer band, width follows the opening. Banded like a front.
-    parts.push({ name: 'Drawer fascia', key: 'Door', length: band, width: WcFascia, face: 'HW', t });
+    // Trimmed 2 mm on every side (DRAWER.fasciaClear) so the cut piece carries the same running clearance drawn in 2D/3D.
+    const fcl = DRAWER.fasciaClear;
+    parts.push({ name: 'Drawer fascia', key: 'Door', length: Math.max(1, band - 2 * fcl), width: Math.max(1, WcFascia - 2 * fcl), face: 'HW', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: sideDepth, width: boxH, face: 'DH', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: sideDepth, width: boxH, face: 'DH', t });
     // The grooved BOTTOM (base) — always present; sits in the wall grooves, so it is wider/deeper than the clear inner box.
@@ -1780,6 +1818,12 @@ function addComp(type) {
   const p = S.lastPoint || { x: w / 2, y: h / 2 };
   if (type === 'drawer') {
     const cell = cellAt(p.x, p.y, null);
+    // Drawers already sharing this opening. Each stays its OWN component (independently selectable and editable) —
+    // the new one is simply added alongside them and the whole stack is then re-fitted by packDrawerStack so they
+    // share the opening. Without this every drawer was created at the cell midpoint with the same seed height, so
+    // each new one landed on an exactly-overlapping rect (clampComp only keeps a drawer inside the carcass — it
+    // never sees its neighbours) and the stack looked like a single drawer.
+    const siblings = drawersInCell(cell);
     const setup = cloneDrawerSetup(moduleDrawerSetup());   // seed the new drawer from the module "Drawer Setup" step
     const seedH = setup.size.height != null && setup.size.height > 0 ? setup.size.height : 150;
     const seedExtra = {};
@@ -1805,6 +1849,9 @@ function addComp(type) {
     clampComp(c);
     S.comps.push(...created, c);
     syncDrawerFlanks(c);                       // shrink the flanks to the drawer's height
+    // Share the opening with any drawers already in it: the newcomer goes on the bottom of the stack and every
+    // drawer is resized so they all fit. One drawer in the cell keeps its own seeded height (nothing to share).
+    if (siblings.length) packDrawerStack(cell, [...siblings, c]);
     S.selectedId = c.id; render(); return;
   }
   if (type === 'door') {
@@ -2053,11 +2100,17 @@ function applySelectedEdit() {
     const cell = cellAt(c.ax, c.ay, null), cw = cell.right - cell.left, ch = cell.top - cell.bottom;
     const W = get('sel-w'), H = get('sel-h');   // store only when smaller than the cell, so a full-cell bank keeps tracking the cell
     if (W > 0 && Math.abs(W - cw) > 0.5) c.w = Math.max(1, Math.min(W, cw)); else delete c.w;
-    if (H > 0 && Math.abs(H - ch) > 0.5) c.h = Math.max(1, Math.min(H, ch)); else delete c.h;
     const ds = drawerSetup(c);
-    const h = get('sel-drawer-height');
-    if (h > 0.5) { c.h = Math.max(1, Math.min(h, ch)); ds.size.height = Math.max(1, h); }
-    else { ds.size.height = null; }
+    // The bank "Height" row and the Drawer-setup "Height" row are two views of ONE number: the drawer height that
+    // sets the fascia band (drawerRect ÷ count) and, through it, every box member — sides/front/back are
+    // DRAWER.boxHeightRatio of the band, seated on DRAWER.runnerClearRatio of runner clearance. Reading the setup
+    // row LAST used to overwrite c.h with its stale value whenever the user typed in the bank row, so the fascia
+    // never moved and the box never recalculated. Take whichever row actually changed against what was displayed,
+    // then write BOTH stores so drawerRect/drawerFascias/drawerBox3D/drawerParts all recompute off the same number.
+    const prevH = drawerSizeHeight(c), shownH = Math.max(1, Math.min(prevH, ch));   // what the bank row was rendered with
+    const typedH = Math.abs(H - shownH) > 0.5 ? H : get('sel-drawer-height');
+    if (typedH > 0.5) { const hv = Math.max(1, Math.min(typedH, ch)); c.h = hv; ds.size.height = hv; }
+    else { delete c.h; ds.size.height = null; }
     const w = get('sel-drawer-width');
     if (w > 0.5) { c.w = Math.max(1, Math.min(w, cw)); ds.size.width = Math.max(1, w); }
     else { ds.size.width = null; }
