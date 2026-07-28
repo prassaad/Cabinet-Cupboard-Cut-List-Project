@@ -66,6 +66,7 @@ const DEFAULTS = () => ({
   band: defaultBand(),
   edgeTape: { thickness: 0.8, width: 25 },   // tape thickness (subtracted from cut size on banded edges) + roll width (must cover the board thickness)
   partNames: {},             // custom cut-list names for the CARCASS faces, keyed by L/R/T/B/BK (components carry their own c.customName)
+  extras: [],                // manually-added extra pieces (dummy panels, exposed fillers…) NOT part of the box geometry: {id,name,w,h,thick,qty}
   viewMode: '2d',
   cam: { yaw: -0.65, pitch: 0.5 },
   explode: 0,
@@ -659,6 +660,13 @@ function cutListInstances() {
     else if (c.type === 'drawer') for (const p of drawerParts(c)) add(p.name, p.key, p.length, p.width, c.id, p.face, p.t);
   }
   for (const r of doorRects()) add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0, r.id, 'HW', t);
+  // Manually-added extra pieces (dummy panels, exposed fillers, …) — no box geometry, entered by hand. Each
+  // {name,w,h,thick,qty} becomes qty flat cut-list rows (W×H×thick); the 'Extra' key carries no edge banding.
+  for (const ex of (S.extras || [])) {
+    const q = Math.max(1, ex.qty | 0), ew = Math.max(1, +ex.w || 0), eh = Math.max(1, +ex.h || 0), et = Math.max(1, +ex.thick || 0);
+    const nm = (ex.name && String(ex.name).trim()) || 'Extra piece';
+    for (let i = 0; i < q; i++) add(nm, 'Extra', eh, ew, 'EX' + (ex.id != null ? ex.id : ''), 'HW', et);
+  }
   return items;
 }
 const groupKey = (it) => `${it.name}|${Math.round(it.length)}|${Math.round(it.width)}|${Math.round(it.thick || 0)}|${it.key}`;

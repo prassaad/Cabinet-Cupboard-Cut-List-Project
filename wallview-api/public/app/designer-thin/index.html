@@ -345,11 +345,13 @@
           </table>
         </div>
         <div id="cutlist-summary" class="summary"></div>
+        <button id="btn-add-extra" type="button" class="full" title="Add pieces that aren't part of the box geometry — dummy panels, exposed fillers, etc.">+ Add Extra Piece</button>
         <div class="panel-empty" id="cutlist-empty">
           <div class="panel-empty-ico" aria-hidden="true">▤</div>
           <p class="panel-empty-title">Nothing to cut yet</p>
           <p class="panel-empty-sub">Add a module and your parts — sizes, quantities and edging — appear here.</p>
         </div>
+        <button id="btn-labels" type="button" class="full" title="Print part labels (one sticker per part, with QR) or a box-content sticker for a selected set of panels.">🏷 Labels</button>
         <div class="btn-row">
           <button id="btn-export" type="button">Export CSV</button>
           <button id="btn-pdf" type="button">Export PDF</button>
@@ -362,6 +364,8 @@
   <div id="wv-modal"></div>
   <div id="wv-toast" class="wv-toast" hidden></div>
 
+  <!-- QR code generator (Kazuhiko Arase, MIT) — vendored, offline; used for label QR codes. -->
+  <script src="qrcode.js"></script>
   <!-- Thin client: no engine. Draws the server's render model; forwards edits (stage 2). -->
   <script src="thin.js"></script>
 </body>

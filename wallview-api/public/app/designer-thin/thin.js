@@ -420,6 +420,173 @@
       (model.bom ? `<br>BOM: <b>${esc(model.bom.currency)} ${fmt(model.bom.total)}</b>` : '');
   }
 
+  // ── Extra pieces (manual cut-list rows not in the box geometry: dummy panels, exposed fillers…) ──
+  // Stored on the active module as `extras: [{id,name,w,h,thick,qty}]` (mm) and pushed to the engine via a
+  // config patch; the engine emits them as cut-list rows, so they flow through the module column, nesting,
+  // totals and exports automatically. This modal just adds/lists/removes them.
+  const currentExtras = () => { const m = design && design.modules && design.modules[active]; return (m && Array.isArray(m.extras)) ? m.extras : []; };
+  function extrasModal() {
+    if (!(design && design.modules && design.modules[active])) return toast('Add a module first', true);
+    const m = $('#wv-modal'), u = curUnit();
+    const render = () => {
+      const list = currentExtras();
+      const rows = list.length
+        ? list.map((x) => `<div class="row" style="cursor:default"><span class="n">${esc(x.name || 'Extra piece')}</span><span class="d">${fmtU(x.w)} × ${fmtU(x.h)} × ${fmtU(x.thick)} · ×${x.qty | 0}</span><button class="ex-del" data-id="${esc(x.id)}" title="Remove">✕</button></div>`).join('')
+        : '<p class="hint">No extra pieces yet. Add dummy panels, exposed fillers, etc. below.</p>';
+      m.innerHTML = `<div class="ov"><div class="box"><h3>Extra pieces <small style="color:var(--muted);font-weight:400">(${u})</small></h3>
+        <style>#ex-form label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted)}#ex-form input{width:100%;box-sizing:border-box}.ex-del{background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;padding:0 4px}.ex-del:hover{color:var(--danger,#e5484d)}</style>
+        ${rows}
+        <div id="ex-form" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+          <label style="margin-bottom:8px">Name<input id="ex-name" type="text" placeholder="Dummy panel, exposed filler…"></label>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px">
+            <label>Width<input id="ex-w" type="number" step="any" min="1"></label>
+            <label>Height<input id="ex-h" type="number" step="any" min="1"></label>
+            <label>Thick<input id="ex-t" type="number" step="any" min="1" value="18"></label>
+            <label>Qty<input id="ex-q" type="number" step="1" min="1" value="1"></label>
+          </div>
+          <button id="ex-add" style="margin-top:10px">+ Add piece</button>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:12px"><button id="ex-close">Close</button></div>
+      </div></div>`;
+      const close = () => { m.innerHTML = ''; };
+      m.querySelector('.ov').addEventListener('click', (e) => { if (e.target.classList.contains('ov')) close(); });
+      $('#ex-close', m).onclick = close;
+      $('#ex-add', m).onclick = async () => {
+        const w = toMM(+$('#ex-w', m).value), h = toMM(+$('#ex-h', m).value), th = toMM(+$('#ex-t', m).value), q = Math.max(1, parseInt($('#ex-q', m).value, 10) || 1);
+        if (!(w > 0 && h > 0 && th > 0)) return toast('Enter Width, Height and Thickness', true);
+        const ex = { id: Date.now(), name: ($('#ex-name', m).value || '').trim(), w: Math.round(w), h: Math.round(h), thick: Math.round(th), qty: q };
+        await patch({ extras: [...currentExtras(), ex] });
+        render();
+      };
+      m.querySelectorAll('.ex-del').forEach((b) => b.onclick = async () => { await patch({ extras: currentExtras().filter((x) => String(x.id) !== String(b.dataset.id)) }); render(); });
+    };
+    render();
+  }
+
+  // ── Labels (print) — part stickers + box-content stickers, each with a QR code ──
+  // Pure client-side: built from model.cutList (the fields the engine already returns). No engine call.
+  function qrDataUrl(text) {
+    if (typeof qrcode !== 'function') return '';
+    try { const q = qrcode(0, 'M'); q.addData(String(text)); q.make(); return q.createDataURL(4, 0); }
+    catch (e) { try { const q = qrcode(0, 'L'); q.addData(String(text).slice(0, 200)); q.make(); return q.createDataURL(4, 0); } catch (_) { return ''; } }
+  }
+  function openPrint(title, css, bodyHTML) {
+    const win = window.open('', '_blank');
+    if (!win) return toast('Allow pop-ups to print', true);
+    win.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>' + css + '</style></head><body>' + bodyHTML +
+      '<div class="noprint" style="text-align:center;margin:9mm 0"><button onclick="window.print()" style="font:14px system-ui;padding:8px 16px;cursor:pointer">Print / Save as PDF</button></div></body></html>');
+    win.document.close();
+    setTimeout(function () { try { win.focus(); win.print(); } catch (e) {} }, 500);
+  }
+  const LABEL_CSS = `@page{size:A4;margin:8mm}*{box-sizing:border-box}body{margin:0;font:11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111}
+    .sheet{display:grid;grid-template-columns:repeat(3,1fr);gap:3mm}
+    .lbl{border:1px solid #222;border-radius:5px;padding:2.5mm 3mm;height:34mm;display:flex;align-items:center;gap:2mm;overflow:hidden;page-break-inside:avoid;break-inside:avoid}
+    .lbl .info{flex:1;min-width:0}.lbl .nm{font-weight:700;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .lbl .nm .no{color:#666;font-weight:600;font-size:10px}.lbl .mod{color:#333;font-size:10px;margin:1px 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .lbl .dim{font-size:10.5px;line-height:1.5}.lbl .qty{font-size:11px;font-weight:700;margin-top:1px}
+    .lbl .qr img{width:20mm;height:20mm;image-rendering:pixelated;display:block}`;
+  const BOX_CSS = `@page{size:A4;margin:12mm}*{box-sizing:border-box}body{margin:0;font:13px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111}
+    .box-lbl{border:2px solid #111;border-radius:8px;padding:9mm;page-break-after:always}
+    .bhead{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm;border-bottom:1.5px solid #111;padding-bottom:5mm;margin-bottom:5mm}
+    .btitle{font-size:22px;font-weight:800}.bmod{font-size:14px;color:#333;margin-top:2px}.bqr{width:28mm;height:28mm;image-rendering:pixelated}
+    table.btbl{width:100%;border-collapse:collapse;font-size:13px}.btbl th,.btbl td{border:1px solid #999;padding:4px 8px;text-align:right}
+    .btbl th:first-child,.btbl td:first-child{text-align:left}.btot{margin-top:5mm;font-size:15px}`;
+  const dimStr = (p) => `W ${fmtU(p.w)} · H ${fmtU(p.h)} · D ${fmtU(p.d)}`;
+  function partLabelCell(p, piece) {
+    const qr = qrDataUrl(`WV|${p.module || ''}|${p.name}|#${p.partNo}|${Math.round(p.w)}x${Math.round(p.h)}x${Math.round(p.d)}x${Math.round(p.thick)}`);
+    const qtyLine = piece ? `Piece ${piece.i} / ${piece.n}` : `Qty ${p.qty}`;
+    return `<div class="lbl"><div class="info">
+      <div class="nm">${esc(p.name)} <span class="no">#${p.partNo}</span></div>
+      <div class="mod">${esc(p.module || '')}</div>
+      <div class="dim">${dimStr(p)}<br>Thick ${fmtU(p.thick)}</div>
+      <div class="qty">${qtyLine}</div>
+    </div>${qr ? `<div class="qr"><img src="${qr}"></div>` : ''}</div>`;
+  }
+  function printPartLabels(perPiece) {
+    const list = (model && model.cutList) || [];
+    if (!list.length) return toast('Nothing to label', true);
+    const cells = [];
+    for (const p of list) {
+      const n = Math.max(1, p.qty | 0);
+      if (perPiece) for (let i = 1; i <= n; i++) cells.push(partLabelCell(p, { i, n }));
+      else cells.push(partLabelCell(p, null));
+    }
+    openPrint('Part labels', LABEL_CSS, `<div class="sheet">${cells.join('')}</div>`);
+  }
+  function printBoxLabel(title, items) {
+    if (!items.length) return toast('Select at least one panel for the box', true);
+    const u = curUnit();
+    const total = items.reduce((a, x) => a + (x.qty | 0), 0);
+    const mods = [...new Set(items.map((x) => x.module).filter(Boolean))].join(', ');
+    const rows = items.map((x) => `<tr><td>${esc(x.name)}</td><td>${fmtU(x.w)} × ${fmtU(x.h)} × ${fmtU(x.d)}</td><td>${fmtU(x.thick)}</td><td>${x.qty}</td></tr>`).join('');
+    const qr = qrDataUrl(`WV-BOX|${title}|${mods}|panels:${total}`);
+    const body = `<div class="box-lbl">
+      <div class="bhead"><div><div class="btitle">${esc(title)}</div><div class="bmod">${esc(mods)}</div></div>${qr ? `<img class="bqr" src="${qr}">` : ''}</div>
+      <table class="btbl"><thead><tr><th>Part</th><th>Size (${u})</th><th>Thick (${u})</th><th>Qty</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="btot">Total panels in this box: <b>${total}</b></div>
+    </div>`;
+    openPrint('Box label — ' + title, BOX_CSS, body);
+  }
+  function labelsModal() {
+    const list = (model && model.cutList) || [];
+    if (!list.length) return toast('Nothing to label yet', true);
+    const m = $('#wv-modal');
+    let mode = 'part';
+    const partView = () => `<p class="hint">One sticker per part with a QR code, printed 3-across on A4.</p>
+      <label class="lb-opt"><input type="radio" name="lblmode" value="piece" checked> One label per <b>piece</b> (expand quantities)</label>
+      <label class="lb-opt"><input type="radio" name="lblmode" value="type"> One label per <b>part type</b> (quantity shown on the label)</label>
+      <button id="lbl-print-part" class="lb-print">🖨 Print part labels</button>`;
+    const boxView = () => `<p class="hint">Tick the panels going into this box (lower a Qty to split a part across boxes), then print the box-content sticker. Repeat per box.</p>
+      <label class="lb-title">Box label<input id="box-title" type="text" value="Box 1"></label>
+      <div class="lb-actions"><button id="box-all" type="button">Select all</button><button id="box-none" type="button">Clear</button></div>
+      <div id="box-list">${list.map((p, i) => `<label class="box-row"><input type="checkbox" class="box-chk" data-i="${i}"><span class="bnm">${esc(p.name)} <span class="bmuted">· ${esc(p.module || '')} · ${dimStr(p)} · T ${fmtU(p.thick)}</span></span><input type="number" class="box-qty" data-i="${i}" min="0" max="${p.qty}" value="${p.qty}"></label>`).join('')}</div>
+      <div id="box-count" class="bmuted"></div>
+      <button id="lbl-print-box" class="lb-print">🖨 Print box sticker</button>`;
+    const render = () => {
+      m.innerHTML = `<div class="ov"><div class="box" style="width:min(620px,94vw)">
+        <style>
+          .seg{display:flex;gap:6px;margin-bottom:12px}.seg button{flex:1}.seg button.on{background:var(--accent);color:#2a1d02;border-color:var(--accent);font-weight:600}
+          .lb-opt{display:flex;align-items:center;justify-content:flex-start;gap:8px;color:var(--ink);margin:6px 0}.lb-opt input{width:auto}
+          .lb-print{margin-top:12px}.lb-title{display:flex;flex-direction:column;align-items:stretch;gap:3px;color:var(--muted);font-size:12px}.lb-title input{width:100%}
+          .lb-actions{display:flex;gap:8px;margin:8px 0}
+          #box-list{max-height:40vh;overflow:auto;border:1px solid var(--line);border-radius:6px;padding:4px 8px;margin-top:6px}
+          .box-row{display:grid;grid-template-columns:auto 1fr 60px;gap:8px;align-items:center;justify-content:stretch;color:var(--ink);margin:0;padding:5px 0;border-bottom:1px solid var(--line)}
+          .box-row:last-child{border-bottom:0}.box-row input[type=checkbox]{width:auto}.box-row .box-qty{width:100%}.bnm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.bmuted{color:var(--muted);font-size:12px}
+        </style>
+        <h3>Labels</h3>
+        <div class="seg"><button id="seg-part" type="button" class="${mode === 'part' ? 'on' : ''}">Part labels</button><button id="seg-box" type="button" class="${mode === 'box' ? 'on' : ''}">Box label</button></div>
+        <div id="lbl-body">${mode === 'part' ? partView() : boxView()}</div>
+        <div style="display:flex;justify-content:flex-end;margin-top:14px"><button id="lbl-close" type="button">Close</button></div>
+      </div></div>`;
+      const close = () => { m.innerHTML = ''; };
+      m.querySelector('.ov').addEventListener('click', (e) => { if (e.target.classList.contains('ov')) close(); });
+      $('#lbl-close', m).onclick = close;
+      $('#seg-part', m).onclick = () => { mode = 'part'; render(); };
+      $('#seg-box', m).onclick = () => { mode = 'box'; render(); };
+      if (mode === 'part') {
+        $('#lbl-print-part', m).onclick = () => { const per = (m.querySelector('input[name=lblmode]:checked') || {}).value !== 'type'; close(); printPartLabels(per); };
+      } else {
+        const upd = () => { let n = 0; m.querySelectorAll('.box-chk').forEach((c) => { if (c.checked) n += Math.max(0, parseInt(m.querySelector(`.box-qty[data-i="${c.dataset.i}"]`).value, 10) || 0); }); $('#box-count', m).textContent = `${n} panel(s) selected for this box`; };
+        $('#box-all', m).onclick = () => { m.querySelectorAll('.box-chk').forEach((c) => c.checked = true); upd(); };
+        $('#box-none', m).onclick = () => { m.querySelectorAll('.box-chk').forEach((c) => c.checked = false); upd(); };
+        m.querySelectorAll('.box-chk, .box-qty').forEach((el) => el.addEventListener('input', upd));
+        upd();
+        $('#lbl-print-box', m).onclick = () => {
+          const title = ($('#box-title', m).value || 'Box').trim();
+          const items = [];
+          m.querySelectorAll('.box-chk').forEach((c) => {
+            if (!c.checked) return; const i = +c.dataset.i, p = list[i];
+            const q = Math.min(p.qty | 0, Math.max(0, parseInt(m.querySelector(`.box-qty[data-i="${i}"]`).value, 10) || 0));
+            if (q > 0) items.push({ name: p.name, module: p.module, w: p.w, h: p.h, d: p.d, thick: p.thick, qty: q });
+          });
+          if (!items.length) return toast('Select at least one panel (qty > 0)', true);
+          printBoxLabel(title, items);
+        };
+      }
+    };
+    render();
+  }
+
   // ── Exports (client presentation from the render model — no engine) ──
   function download(name, blob) { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
 
@@ -1185,6 +1352,8 @@
     if (inExp) inExp.addEventListener('input', () => { explode = parseFloat(inExp.value) || 0; if (mode === '3d') draw3D(); });
 
     // Exports (client-side from the render model).
+    onClick('btn-add-extra', extrasModal);
+    onClick('btn-labels', labelsModal);
     onClick('btn-export', exportCSV);
     onClick('btn-pdf', exportPDF);
     onClick('btn-prod', exportProdPack);

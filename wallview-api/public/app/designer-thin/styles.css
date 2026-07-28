@@ -128,6 +128,8 @@ body.no-modules #card-components > :not(h2):not(.panel-empty) { display: none; }
 body.no-modules .panel.right .cut-scope,
 body.no-modules .panel.right .table-wrap,
 body.no-modules .panel.right .summary,
+body.no-modules .panel.right #btn-add-extra,
+body.no-modules .panel.right #btn-labels,
 body.no-modules .panel.right .btn-row { display: none; }
 body.no-modules .panel-empty { display: block; }
 body.no-modules .setup-intro,
