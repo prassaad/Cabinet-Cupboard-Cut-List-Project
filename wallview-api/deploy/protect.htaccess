@@ -1,0 +1,27 @@
+# WallView API — code protection.
+# Upload this file INTO the wallview-api/ root RENAMED to ".htaccess".
+# It blocks web access to everything at this level (src/, vendor/, migrations/,
+# scripts/, bootstrap.php, .env). Only the public/ subfolder re-grants access
+# (see public/.htaccess "Require all granted"), so nothing but public/ is served.
+
+# Apache 2.4+ / LiteSpeed
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+
+# Apache 2.2 fallback
+<IfModule !mod_authz_core.c>
+  Order deny,allow
+  Deny from all
+</IfModule>
+
+# Belt-and-suspenders: never serve the env file under any circumstances.
+<Files ".env">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order deny,allow
+    Deny from all
+  </IfModule>
+</Files>

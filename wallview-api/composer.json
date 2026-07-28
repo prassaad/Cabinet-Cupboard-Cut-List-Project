@@ -1,0 +1,33 @@
+{
+    "name": "standscale/wallview-api",
+    "description": "WallView SaaS API — thin-client engine + multi-tenant backend (ARCH-004). Layers: Security Core -> SaaS Core -> Product modules.",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.0",
+        "firebase/php-jwt": "^7.0",
+        "ramsey/uuid": "^4.7",
+        "vlucas/phpdotenv": "^5.6"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "Standscale\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Standscale\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true,
+        "platform": {
+            "php": "8.0.30"
+        }
+    },
+    "minimum-stability": "stable"
+}

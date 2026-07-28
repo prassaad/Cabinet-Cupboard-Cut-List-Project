@@ -276,8 +276,13 @@ function loadEngine(appSrc) {
       var scope = opts.scope === 'job' ? 'job' : 'module';
       cutScope = scope;
       var job = scope === 'job';
-      var rows = (job ? jobCutList() : cutList()).map(function (p) {
-        return { name: p.name, qty: p.qty, w: p.w, h: p.h, d: p.d, thick: p.thick,
+      // Each row carries a sequential unique Part No. and its Module name (job scope = the part's own module;
+      // module scope = the active module). Part names themselves stay standard (Side/Top/Bottom/…).
+      var activeMod = JOB.modules[JOB.active] || null;
+      var activeName = (activeMod && activeMod.name) || ('Module ' + ((JOB.active | 0) + 1));
+      var rows = (job ? jobCutList() : cutList()).map(function (p, i) {
+        return { partNo: i + 1, module: job ? (p.mname || '—') : activeName,
+                 name: p.name, qty: p.qty, w: p.w, h: p.h, d: p.d, thick: p.thick,
                  length: p.length, width: p.width, key: p.key, srcId: (p.srcId != null ? p.srcId : null),
                  band: job ? (p.band || '—') : bandNotation(p.key) };
       });

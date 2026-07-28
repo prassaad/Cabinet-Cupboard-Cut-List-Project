@@ -22,6 +22,8 @@ const EDGES = ['L1', 'L2', 'W1', 'W2'];   // L edges run along length, W edges a
 const EDGE_LABELS = {
   Side:      { L1: 'Front', L2: 'Back',   W1: 'Top',  W2: 'Bottom' },
   TopBottom: { L1: 'Front', L2: 'Back',   W1: 'Left', W2: 'Right'  },
+  Top:       { L1: 'Front', L2: 'Back',   W1: 'Left', W2: 'Right'  },   // a separately-mounted top (split from TopBottom for per-face auto-banding)
+  Bottom:    { L1: 'Front', L2: 'Back',   W1: 'Left', W2: 'Right'  },
   Shelf:     { L1: 'Front', L2: 'Back',   W1: 'Left', W2: 'Right'  },
   Vertical:  { L1: 'Front', L2: 'Back',   W1: 'Top',  W2: 'Bottom' },
   Door:      { L1: 'Left',  L2: 'Right',  W1: 'Top',  W2: 'Bottom' },
@@ -29,10 +31,16 @@ const EDGE_LABELS = {
 };
 const edgeLabel = (key, e) => (EDGE_LABELS[key] && EDGE_LABELS[key][e]) || e;
 
-// Edge banding is OFF by default for every part (user unchecks by default for now). The per-part
-// keys are kept so the banding toggles — and later auto-banding — have a place to write into.
+// Default edge banding (0.8 mm). Manual per-part toggles UNION with the automatic banding of exterior faces
+// (see edgeOn/autoBandAll): the two sides are always exterior so they carry all four edges; a top/bottom cap
+// is auto-banded only when mounted Outside (outset). Shelves & verticals get their FRONT edge only by default.
+// Banding never changes the external box size — the raw cut size is reduced by the tape thickness (see add()).
 const defaultBand = () => ({
-  Side: {}, TopBottom: {}, Shelf: {}, Vertical: {}, Door: {}, Back: {},
+  Side: { L1: true, L2: true, W1: true, W2: true },   // sides are always exterior → all four edges
+  TopBottom: {},                                       // caps auto-band all four when Outside (outset); plain when inset
+  Shelf: { L1: true },                                 // shelves: front edge only
+  Vertical: { L1: true },                              // verticals: front edge only
+  Door: {}, Back: {},
 });
 
 const DEFAULTS = () => ({
@@ -57,6 +65,7 @@ const DEFAULTS = () => ({
   grainLock: false,
   band: defaultBand(),
   edgeTape: { thickness: 0.8, width: 25 },   // tape thickness (subtracted from cut size on banded edges) + roll width (must cover the board thickness)
+  partNames: {},             // custom cut-list names for the CARCASS faces, keyed by L/R/T/B/BK (components carry their own c.customName)
   viewMode: '2d',
   cam: { yaw: -0.65, pitch: 0.5 },
   explode: 0,
@@ -128,7 +137,19 @@ const fmtU = (mm) => `${fmt(mm)} ${S.unit}`;
 const unitStep = () => S.unit === 'mm' ? 1 : 0.125;
 
 // ---------- Banding helpers ----------
-const edgeOn = (key, e) => !!(S.band[key] && S.band[key][e]);
+// A face that shows on the OUTSIDE of the box is auto-banded on ALL four edges (you can't leave a visible edge
+// raw): the two sides are always exterior, and a top/bottom cap is exterior only when mounted Outside (outset,
+// sitting over the sides). This is unioned with the manual per-part banding below.
+// Auto-banding of exterior faces (independent of the manual band grid). Sides are always exterior → all four
+// edges. A top/bottom cap set Outside (outset) shows on all four edges; set Inset it shows only its Front & Back
+// (L1/L2) — the Left/Right ends butt between the sides and are hidden — so only those two are auto-banded.
+const autoBandEdge = (key, e) => {
+  if (key === 'Side') return true;
+  const isTop = key === 'TopBottom' || key === 'Top', isBot = key === 'Bottom';
+  if (isTop || isBot) return (isBot ? capOutset('bottom') : capOutset('top')) ? true : (e === 'L1' || e === 'L2');
+  return false;
+};
+const edgeOn = (key, e) => autoBandEdge(key, e) || !!(S.band[key] && S.band[key][e]);
 const bandNotation = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return on.length ? on.map(e => edgeLabel(key, e)).join(', ') : '—'; };
 const bandLen = (key, length, width) =>
   (edgeOn(key, 'L1') ? length : 0) + (edgeOn(key, 'L2') ? length : 0) +
@@ -597,6 +618,14 @@ function drawerParts(c) {
 // ---------- Cut list ----------
 // Every instance carries a `srcId` linking it back to the design part it came from:
 // carcass faces use string ids ('L','R','T','B','BK'), components/doors/drawers use their numeric id.
+// Custom part-name override for one cut-list part. Carcass faces (string srcId L/R/T/B/BK) read S.partNames;
+// components (numeric srcId) read their own c.customName. Drawers are skipped — one drawer produces several
+// distinct sub-parts (fascia/sides/bottom/…) that must not collapse under a single name. Empty ⇒ the default.
+function resolvePartName(srcId, def) {
+  if (typeof srcId === 'string') { const o = S.partNames && S.partNames[srcId]; return (o != null && o !== '') ? o : def; }
+  if (typeof srcId === 'number') { const c = S.comps.find(x => x.id === srcId); if (c && c.type !== 'drawer' && c.customName) return c.customName; }
+  return def;
+}
 function cutListInstances() {
   const { w, h, d, t, back } = S.cab;
   const items = [];
@@ -605,6 +634,7 @@ function cutListInstances() {
   // two cut dims [length,width] to their axes and the remaining axis takes the board thickness. length/width are kept
   // for sheet nesting, board-area and edge-banding math; w/h/d/thick drive the human-readable cut list & editors.
   const add = (name, key, length, width, srcId, face, thick) => {
+    name = resolvePartName(srcId, name);   // apply any user-assigned custom name for this part slot
     const cutL = Math.max(1, length - bandLenReduce(key)), cutW = Math.max(1, width - bandWidthReduce(key));
     const ax = { W: thick, H: thick, D: thick }; ax[face[0]] = cutL; ax[face[1]] = cutW;
     items.push({ name, key, srcId, face, flen: length, fwid: width, length: cutL, width: cutW, w: ax.W, h: ax.H, d: ax.D, thick });
@@ -617,9 +647,9 @@ function cutListInstances() {
   const topLen = capWidth('top'), topW = capDepth('top'), botLen = capWidth('bottom'), botW = capDepth('bottom');
   if (topOn && botOn && topLen === botLen && topW === botW) {   // both present & identical: grouped "Top / Bottom" (qty 2)
     add('Top / Bottom', 'TopBottom', topLen, topW, 'T', 'WD', t); add('Top / Bottom', 'TopBottom', botLen, botW, 'B', 'WD', t);
-  } else {                                                      // otherwise list whichever are present, separately
-    if (topOn) add('Top', 'TopBottom', topLen, topW, 'T', 'WD', t);
-    if (botOn) add('Bottom', 'TopBottom', botLen, botW, 'B', 'WD', t);
+  } else {                                                      // otherwise list whichever are present, separately (own keys so each auto-bands on its own mount)
+    if (topOn) add('Top', 'Top', topLen, topW, 'T', 'WD', t);
+    if (botOn) add('Bottom', 'Bottom', botLen, botW, 'B', 'WD', t);
   }
   // Back panel spans the cabinet width × height; thickness is its own (thinner) board depth.
   if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W, 'BK', 'WH', S.backPanel.thickness); }
@@ -664,10 +694,11 @@ function jobCutListInstances() {
 function jobCutList() {
   const map = new Map();
   JOB.modules.forEach((m, mi) => withModule(m, () => {
+    const mname = m.name || `Module ${mi + 1}`;
     for (const it of cutListInstances()) {
-      const k = groupKey(it);
+      const k = mi + '|' + groupKey(it);   // group WITHIN each module so every row keeps its own module name
       if (map.has(k)) map.get(k).qty++;
-      else map.set(k, { ...it, qty: 1, band: bandNotation(it.key) });
+      else map.set(k, { ...it, qty: 1, band: bandNotation(it.key), mname });
     }
   }));
   return [...map.values()];
@@ -700,7 +731,7 @@ function renderCutList() {
   const tbody = document.querySelector('#cutlist tbody');
   tbody.innerHTML = parts.map(p => {
     const bn = job ? (p.band || '—') : bandNotation(p.key);
-    return `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${p.name}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${bn}</td></tr>`;
+    return `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${escapeHtml(p.name)}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${bn}</td></tr>`;
   }).join('');
   const ths = document.querySelectorAll('#cutlist thead th');
   ths[2].textContent = `Width (${S.unit})`; ths[3].textContent = `Height (${S.unit})`; ths[4].textContent = `Depth (${S.unit})`; ths[5].textContent = `Thick (${S.unit})`;
@@ -1917,6 +1948,12 @@ function renderSelectionPanel() {
   $('sel-delete').classList.remove('hidden'); $('sel-update').classList.remove('hidden');   // default both visible; branches adjust
   const comp = typeof id === 'number' ? S.comps.find(c => c.id === id) : null;
   const row = (rid, label, val) => `<label class="sel-row"><span>${label}</span><input id="${rid}" type="number" step="${step}" value="${val}"></label>`;
+  // "Part name": a custom cut-list label for this part. Components store it on themselves (c.customName); carcass
+  // faces store it in S.partNames[id]. Empty falls back to the default (shown as the placeholder). Applies live.
+  const nameRow = (pid, def) => {
+    const cur = typeof pid === 'number' ? ((comp && comp.customName) || '') : ((S.partNames && S.partNames[pid]) || '');
+    return `<label class="sel-row"><span>Part name</span><input id="sel-partname" type="text" value="${escapeHtml(cur)}" placeholder="${escapeHtml(def)}"></label>`;
+  };
   const sel = (v) => lastAnchor === v ? ' selected' : '';
   if (comp && comp.type === 'door') {
     const base = doorBase(comp), Wc = base.right - base.left, Hc = base.top - base.bottom, two = (comp.count | 0) === 2;
@@ -1934,6 +1971,7 @@ function renderSelectionPanel() {
       : `<label class="sel-row"><span>Covers</span><select id="sel-covers">${optC('cell', 'This cell')}${optC('column', 'Full column (ignore shelves)')}${optC('row', 'Full row (ignore verticals)')}${optC('all', 'Whole interior')}</select></label>`;
     const span = doorSpan(comp), spanH = span.top - span.bottom, off = span.bottom - base.bottom;
     fields.innerHTML =
+      nameRow(id, 'Door') +
       `<label class="sel-row"><span>Leaves</span><select id="sel-leaves"><option value="1"${two ? '' : ' selected'}>1 door</option><option value="2"${two ? ' selected' : ''}>2 doors</option></select></label>` +
       `<label class="sel-row"><span>Front</span><select id="sel-mount">${optM('outset', 'Outset (overlay)')}${optM('inset', 'Inset')}</select></label>` +
       row('sel-h', 'Height', fmt(spanH)) +
@@ -1995,6 +2033,7 @@ function renderSelectionPanel() {
     const htp = partThick(comp) / 2, voff = lastVAnchor === 'end' ? htp : lastVAnchor === 'start' ? -htp : 0;
     title.innerHTML = `${isShelf ? 'Shelf' : 'Vertical'} <small>(${u})</small>`;
     fields.innerHTML =
+      nameRow(id, isShelf ? 'Shelf' : 'Vertical') +
       row('sel-pos', isShelf ? 'Height' : 'Position', fmt(comp.pos + voff)) +
       `<label class="sel-row"><span>${isShelf ? 'Height anchor' : 'Position anchor'}</span><select id="sel-vanchor">` +
         `<option value="start"${selV('start')}>${isShelf ? 'Bottom' : 'Left'}</option>` +
@@ -2023,6 +2062,7 @@ function renderSelectionPanel() {
     const optA = (v, lbl) => `<option value="${v}"${anc === v ? ' selected' : ''}>${lbl}</option>`;
     title.innerHTML = `${which === 'top' ? 'Top' : 'Bottom'} panel <small>(${u})</small>`;
     fields.innerHTML =
+      nameRow(id, which === 'top' ? 'Top' : 'Bottom') +
       `<label class="sel-row"><span>Mount</span><select id="sel-cap-mount">${optM('inset', 'Inset (between sides)')}${optM('outset', 'Outset (over sides)')}</select></label>` +
       row('sel-cap-depth', 'Depth', fmt(capDepth(which))) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-cap-anchor">${optA('back', 'Back')}${optA('center', 'Center')}${optA('front', 'Front')}</select></label>`;
@@ -2034,6 +2074,7 @@ function renderSelectionPanel() {
     const deletable = (id === 'L' || id === 'R' || id === 'BK');   // sides + back can be removed; restore via Setup toggles
     title.innerHTML = `${info.name} <small>(${u})</small>`;
     fields.innerHTML =
+      nameRow(id, info.name) +
       `<div class="sel-ro">Width <b>${fmtU(info.w)}</b></div>` +
       `<div class="sel-ro">Height <b>${fmtU(info.h)}</b></div>` +
       `<div class="sel-ro">Depth <b>${fmtU(info.d)}</b></div>` +
@@ -2046,6 +2087,15 @@ function renderSelectionPanel() {
   }
   fields.dataset.editId = String(id);
   card.classList.remove('hidden');
+}
+// Store (or clear) the custom cut-list name for the selected part. Components keep it on themselves so it travels
+// with the part; carcass faces (string id) live in S.partNames. Empty clears the override back to the default.
+function setPartName(id, raw) {
+  const v = (raw || '').trim();
+  if (typeof id === 'number') { const c = S.comps.find(x => x.id === id); if (!c || c.type === 'drawer') return; if (v) c.customName = v; else delete c.customName; }
+  else if (typeof id === 'string') { if (!S.partNames) S.partNames = {}; if (v) S.partNames[id] = v; else delete S.partNames[id]; }
+  else return;
+  render();   // renderSelectionPanel keeps the focused name field intact; the cut list + exports pick up the new name live
 }
 function applySelectedEdit() {
   if (S.selectedId === 'T' || S.selectedId === 'B') {
@@ -2740,10 +2790,14 @@ $('sel-close').addEventListener('click', () => { S.selectedId = null; render(); 
 $('sel-fields').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); applySelectedEdit(); } });
 // Drawer banks apply live as you type; drawer + door dropdowns apply on change (other parts still use the Update button).
 const isCapSel = () => S.selectedId === 'T' || S.selectedId === 'B';
-const liveDrawer = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
-const liveChange = () => { const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
+const editingPartName = () => document.activeElement && document.activeElement.id === 'sel-partname';
+const liveDrawer = () => { if (editingPartName()) return; const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
+const liveChange = () => { if (editingPartName()) return; const c = typeof S.selectedId === 'number' ? S.comps.find(x => x.id === S.selectedId) : null; if ((c && (c.type === 'drawer' || c.type === 'door')) || isCapSel()) applySelectedEdit(); };
 $('sel-fields').addEventListener('input', liveDrawer);
 $('sel-fields').addEventListener('change', liveChange);
+// Custom "Part name" field: store live as the user types (any part branch). Independent of the Update button so
+// carcass sides/back — which have no Update — can be renamed too.
+$('sel-fields').addEventListener('input', (e) => { if (e.target.id === 'sel-partname') setPartName(S.selectedId, e.target.value); });
 // Door per-side gap: switching the "Gap side" dropdown just refreshes the single Gap field to that side's stored
 // value (the value itself is applied to the selected side by applySelectedEdit). Runs after liveChange above.
 $('sel-fields').addEventListener('change', (e) => {

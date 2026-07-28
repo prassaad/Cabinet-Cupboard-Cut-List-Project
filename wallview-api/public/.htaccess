@@ -1,0 +1,22 @@
+# Front-controller rewrite: everything under this app goes to index.php.
+
+# Re-grant web access to public/ only. The parent wallview-api/.htaccess denies
+# everything (so src/, vendor/, .env are never served); this re-opens public/.
+<IfModule mod_authz_core.c>
+  Require all granted
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Allow from all
+</IfModule>
+
+RewriteEngine On
+
+# Preserve the Authorization header (some Apache/PHP-CGI setups drop it).
+RewriteCond %{HTTP:Authorization} ^(.+)$
+RewriteRule ^ - [E=HTTP_AUTHORIZATION:%1]
+
+# Serve real files/dirs directly; route everything else to index.php.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
