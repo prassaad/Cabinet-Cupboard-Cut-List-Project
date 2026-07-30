@@ -220,6 +220,13 @@ const innerT = () => capOn('top') ? S.cab.h - S.cab.t : S.cab.h;
 
 // ---------- Geometry: cells, spans, segments ----------
 function normalizeComps() {
+  // Never reissue an id already used by a component. Older/loaded designs can arrive with a stale or missing
+  // `_seq` (≤ the highest existing id); without this guard the next new part (e.g. a picked-cells span door)
+  // would be given an id that COLLIDES with an existing divider — the two then share identity, and the cut
+  // list, 2D rendering and selection all cross-wire (the classic "door lands on the wrong/other cell" bug).
+  let maxId = 0;
+  for (const c of S.comps) if (typeof c.id === 'number' && c.id > maxId) maxId = c.id;
+  if (!(S._seq > maxId)) S._seq = maxId + 1;
   for (const c of S.comps) {
     if (c.type === 'drawer' || c.type === 'door') continue;
     if (c.a0 == null || c.a1 == null) {

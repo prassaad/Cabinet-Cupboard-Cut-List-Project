@@ -1362,8 +1362,11 @@
     onClick('btn-door-cells', () => setCellMode(true));
     onClick('btn-door-cancel', () => setCellMode(false));
     onClick('btn-door-place', () => {
-      const cells = cellSel.slice(), count = +(($('#in-door-leaves') || {}).value || 1);
-      setCellMode(false); editIntent('add_span_door', { cells, count });
+      // A picked-cells door is ONE door covering the whole selection. Force count:1 — the "Leaves" dropdown is
+      // for a single-cell door and would otherwise split this into two panels (the "extra door" bug). To make
+      // it a double door afterwards, select the placed door and change its Leaves in the properties panel.
+      const cells = cellSel.slice();
+      setCellMode(false); editIntent('add_span_door', { cells, count: 1 });
     });
   }
 
