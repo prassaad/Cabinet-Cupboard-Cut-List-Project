@@ -284,7 +284,7 @@ function loadEngine(appSrc) {
         return { partNo: i + 1, module: job ? (p.mname || '—') : activeName,
                  name: p.name, qty: p.qty, w: p.w, h: p.h, d: p.d, thick: p.thick,
                  length: p.length, width: p.width, key: p.key, srcId: (p.srcId != null ? p.srcId : null),
-                 band: job ? (p.band || '—') : bandNotation(p.key) };
+                 band: p.band || '—', tapeLen: p.tapeLen || 0 };
       });
       var instances = job ? jobCutListInstances() : cutListInstances();
       var pack = job ? jobNest() : nest(instances);
@@ -293,7 +293,7 @@ function loadEngine(appSrc) {
       else {
         parts = rows.reduce(function (a, p) { return a + p.qty; }, 0);
         area = rows.reduce(function (a, p) { return a + p.qty * p.length * p.width; }, 0);
-        tape = rows.reduce(function (a, p) { return a + p.qty * bandLen(p.key, p.length, p.width); }, 0);
+        tape = rows.reduce(function (a, p) { return a + p.qty * (p.tapeLen || 0); }, 0);
       }
       var bom = aiEstimateBOM({ scope: scope, currency: opts.currency, prices: opts.prices });
       var out = {

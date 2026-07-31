@@ -286,6 +286,9 @@ const verticalSegments = (c) =>
 //    and gives back half the reveal so neighbouring overlay doors leave a `reveal` gap between them.
 //  - 'inset': the door fits inside the opening with the reveal gap deducted on every side.
 const doorMount = (c) => (c.mount === 'inset' ? 'inset' : 'outset');
+// Per-door edge-banding thickness (mm), applied on ALL FOUR sides of the door. 0 / unset = no banding.
+// Selectable per door (0.8 / 1.0 / 1.3 / 2.0). Stored on the door as c.bandThick; parsed so a "2" string is fine.
+const doorBandThick = (c) => Math.max(0, parseFloat(c && c.bandThick) || 0);
 // Every new door starts with a 1 mm gap on all four sides (a small reveal). Stored per-door (gapL/R/T/B) so the
 // value persists with the component and shows in the door editor's Gap field; the user can still change it per side.
 const DOOR_GAP = 1;   // mm
@@ -641,11 +644,21 @@ function cutListInstances() {
   // Each part carries spatial dims w/h/d (left-right / top-bottom / front-back) + thickness `thick`: `face` maps the
   // two cut dims [length,width] to their axes and the remaining axis takes the board thickness. length/width are kept
   // for sheet nesting, board-area and edge-banding math; w/h/d/thick drive the human-readable cut list & editors.
-  const add = (name, key, length, width, srcId, face, thick) => {
+  const add = (name, key, length, width, srcId, face, thick, doorBand) => {
     name = resolvePartName(srcId, name);   // apply any user-assigned custom name for this part slot
-    const cutL = Math.max(1, length - bandLenReduce(key)), cutW = Math.max(1, width - bandWidthReduce(key));
+    // Banded edges + tape thickness for THIS part. Doors carry a per-door thickness (doorBand) applied on ALL
+    // four sides; every other part uses the module tape thickness on whichever edges are ticked/auto-banded.
+    // Banding never changes the finished size — the raw cut is reduced by the tape thickness (cut = finished − tape).
+    let eL1, eL2, eW1, eW2, bt;
+    if (doorBand != null) { bt = Math.max(0, doorBand); const on = bt > 0; eL1 = eW1 = eL2 = eW2 = on; }
+    else { bt = tapeTh(); eL1 = edgeOn(key, 'L1'); eL2 = edgeOn(key, 'L2'); eW1 = edgeOn(key, 'W1'); eW2 = edgeOn(key, 'W2'); }
+    const cutL = Math.max(1, length - (eW1 ? bt : 0) - (eW2 ? bt : 0));   // W1/W2 sit at the length ends → reduce length
+    const cutW = Math.max(1, width - (eL1 ? bt : 0) - (eL2 ? bt : 0));    // L1/L2 run along the length → reduce width
+    const on = [eL1 && 'L1', eL2 && 'L2', eW1 && 'W1', eW2 && 'W2'].filter(Boolean);
+    const band = on.length ? on.map(e => edgeLabel(key, e)).join(', ') + (doorBand != null ? ` · ${bt} mm` : '') : '—';
+    const tapeLen = (eL1 ? length : 0) + (eL2 ? length : 0) + (eW1 ? width : 0) + (eW2 ? width : 0);
     const ax = { W: thick, H: thick, D: thick }; ax[face[0]] = cutL; ax[face[1]] = cutW;
-    items.push({ name, key, srcId, face, flen: length, fwid: width, length: cutL, width: cutW, w: ax.W, h: ax.H, d: ax.D, thick });
+    items.push({ name, key, srcId, face, flen: length, fwid: width, length: cutL, width: cutW, w: ax.W, h: ax.H, d: ax.D, thick, band, tapeLen, bandThick: bt });
   };
   // Sides span the cabinet height × depth; the board thickness is their left-right width. Skip removed sides.
   if (sideLOn()) add('Side', 'Side', sideHeight(), d, 'L', 'HD', t);
@@ -666,7 +679,7 @@ function cutListInstances() {
     else if (c.type === 'vertical') for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c), c.id, 'HD', partThick(c));
     else if (c.type === 'drawer') for (const p of drawerParts(c)) add(p.name, p.key, p.length, p.width, c.id, p.face, p.t);
   }
-  for (const r of doorRects()) add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0, r.id, 'HW', t);
+  for (const r of doorRects()) { const dc = S.comps.find(x => x.id === r.id); add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0, r.id, 'HW', t, doorBandThick(dc)); }
   // Manually-added extra pieces (dummy panels, exposed fillers, …) — no box geometry, entered by hand. Each
   // {name,w,h,thick,qty} becomes qty flat cut-list rows (W×H×thick); the 'Extra' key carries no edge banding.
   for (const ex of (S.extras || [])) {
@@ -713,7 +726,7 @@ function jobCutList() {
     for (const it of cutListInstances()) {
       const k = mi + '|' + groupKey(it);   // group WITHIN each module so every row keeps its own module name
       if (map.has(k)) map.get(k).qty++;
-      else map.set(k, { ...it, qty: 1, band: bandNotation(it.key), mname });
+      else map.set(k, { ...it, qty: 1, band: it.band, mname });
     }
   }));
   return [...map.values()];
@@ -722,7 +735,7 @@ function jobCutList() {
 function jobTotals() {
   let tapeMM = 0, areaMM2 = 0, partCount = 0;
   JOB.modules.forEach((m) => withModule(m, () => {
-    for (const it of cutListInstances()) { tapeMM += bandLen(it.key, it.length, it.width); areaMM2 += it.length * it.width; partCount++; }
+    for (const it of cutListInstances()) { tapeMM += (it.tapeLen || 0); areaMM2 += it.length * it.width; partCount++; }
   }));
   return { tapeMM, areaMM2, partCount };
 }

@@ -1000,7 +1000,9 @@
         + optRow('count', 'Leaves', [[1, '1 door'], [2, '2 doors']], c.count || 1)
         + optRow('mount', 'Front', [['outset', 'Outset (overlay)'], ['inset', 'Inset']], c.mount || 'outset')
         + optRow('valign', 'Anchor', [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']], c.valign || 'bottom')
-        + optRow('covers', 'Covers', [['cell', 'This cell'], ['column', 'Full column'], ['row', 'Full row'], ['all', 'Whole interior']], c.covers || 'cell');
+        + optRow('covers', 'Covers', [['cell', 'This cell'], ['column', 'Full column'], ['row', 'Full row'], ['all', 'Whole interior']], c.covers || 'cell')
+        // Edge banding on all four sides of the door — pick the tape thickness; the cut size is reduced automatically.
+        + optRow('bandThick', 'Edge banding', [['0', 'None'], ['0.8', '0.8 mm'], ['1', '1.0 mm'], ['1.3', '1.3 mm'], ['2', '2.0 mm']], (c.bandThick != null ? String(c.bandThick) : '0'));
     } else if (c.type === 'drawer') {
       const ds = c.drawerSetup || {}, sz = ds.size || {}, bp = ds.backPanel || {}, cap = (ds.caps && ds.caps.bottom) || {};
       html = selRow('count', 'Drawers', c.count || 1, true)
