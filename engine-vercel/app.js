@@ -66,6 +66,11 @@ const DEFAULTS = () => ({
   band: defaultBand(),
   edgeTape: { thickness: 0.8, width: 25 },   // tape thickness (subtracted from cut size on banded edges) + roll width (must cover the board thickness)
   partNames: {},             // custom cut-list names for the CARCASS faces, keyed by L/R/T/B/BK (components carry their own c.customName)
+  // Panel colour / decor code (the board a part is cut from, e.g. "U999 ST9" or "White Oak H1180"). Free text —
+  // codes are supplier-specific. Resolved per part in three layers, most specific first: the part's own override,
+  // then the per-part-type code, then this module default. See resolvePartColour.
+  colours: { default: '', parts: {} },   // parts keyed like the banding grid: Side/TopBottom/Top/Bottom/Shelf/Vertical/Door/Back/DrawerBox/Extra
+  partColours: {},           // per-face colour overrides for the CARCASS faces, keyed like partNames (components carry their own c.colourCode)
   extras: [],                // manually-added extra pieces (dummy panels, exposed fillers…) NOT part of the box geometry: {id,name,w,h,thick,qty}
   viewMode: '2d',
   cam: { yaw: -0.65, pitch: 0.5 },
@@ -170,14 +175,20 @@ const bandInfo = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return
 //  - overlay : full-size panel on the rear (length w × height h), front face at z = thickness
 //  - groove / rabbet : inset panel housed in grooves/rebates; size = inner opening + 2× engagement,
 //    recessed from the rear by `setback`; front face at z = setback + thickness
-function backGeom() {
+// `b` is one box segment (see boxSegments) — omit it for the whole carcass, which is what an unsplit
+// cabinet is. A split carcass gives every box its own back, spanning that box only.
+function backGeom(b) {
   const { w, h, t } = S.cab, bp = S.backPanel;
-  if (bp.type === 'overlay') return { L: w, W: h, x0: 0, x1: w, y0: 0, y1: h, z0: 0, z1: bp.thickness, front: bp.thickness };
+  const bx0 = b ? b.x0 : 0, bx1 = b ? b.x1 : w;                  // outer span (overlay backs cover it edge to edge)
+  const bl = b ? b.left : t, br = b ? b.right : w - t;           // clear opening (grooved/rabbeted backs sit in it)
+  if (bp.type === 'overlay') return { L: bx1 - bx0, W: h, x0: bx0, x1: bx1, y0: 0, y1: h, z0: 0, z1: bp.thickness, front: bp.thickness };
   const eng = Math.max(0, Math.min(bp.groove, t - 1));
-  const x0 = t - eng, x1 = w - t + eng, y0 = t - eng, y1 = h - t + eng;
+  const x0 = bl - eng, x1 = br + eng, y0 = t - eng, y1 = h - t + eng;
   const z0 = bp.setback, z1 = bp.setback + bp.thickness;
   return { L: x1 - x0, W: y1 - y0, x0, x1, y0, y1, z0, z1, front: z1 };
 }
+// One back per box (empty when the back is switched off).
+const backPieces = () => !S.cab.back ? [] : boxSegments().map((b, i, a) => ({ ...backGeom(b), srcId: boxFaceId('BK', i, a.length) }));
 const backFront = () => S.cab.back ? backGeom().front : 0;   // z where the usable interior begins
 
 // Usable interior depth = cabinet depth minus the back recess (back front face). Shelves/verticals can't exceed it.
@@ -193,8 +204,7 @@ const compDepth = (c) => c.depth != null ? Math.max(1, Math.min(c.depth, usableD
 const capOf = (which) => S.cab[which] || { mount: 'inset', depth: null, anchor: 'back' };
 const capOutset = (which) => capOf(which).mount === 'outset';
 const capDepth = (which) => { const c = capOf(which); return c.depth != null ? Math.max(1, c.depth) : S.cab.d; };   // loosely coupled: may exceed cabinet depth
-const capWidth = (which) => capOutset(which) ? S.cab.w : Math.max(1, S.cab.w - 2 * S.cab.t);
-const capXRange = (which) => capOutset(which) ? { x0: 0, x1: S.cab.w } : { x0: S.cab.t, x1: S.cab.w - S.cab.t };
+// A cap's width and x-range are per BOX (a carcass split by dual verticals has one cap per box) — see capPieces.
 function capZRange(which) {                                    // z=0 is the rear, z=d the front face
   const d = S.cab.d, dep = capDepth(which), a = capOf(which).anchor || 'back';
   const z0 = a === 'front' ? d - dep : a === 'center' ? (d - dep) / 2 : 0;
@@ -236,10 +246,80 @@ function normalizeComps() {
     // e.g. a full-height vertical from an older layout is drawn back between the top & bottom panels.
     const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
     c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi));
+    seatDualFullHeight(c);   // a dual divider keeps splitting the carcass whatever the envelope does
   }
 }
-// Panel thickness for a shelf/vertical: its own explicit override or the cabinet default material thickness.
-const partThick = (c) => (c && c.thick != null) ? Math.max(1, c.thick) : S.cab.t;
+// ---------- Dual verticals = carcass box boundaries ----------
+// A vertical marked `dual` is TWO boards face-to-face: the right-hand side of the box on its left and the
+// left-hand side of the box on its right. It is therefore not a divider inside one shared carcass — it SPLITS
+// the carcass, and each resulting box gets its OWN top, bottom, back and pair of sides.
+//   cabinet width = Σ(box openings) + 2 × thickness × (number of boxes)
+// Only a divider that spans the FULL interior height can carry the caps, so only that one splits the box; a
+// partial-height dual is still two boards (2× thickness, two cut-list rows) but leaves the carcass whole.
+const panelThick = (c) => (c && c.thick != null) ? Math.max(1, c.thick) : S.cab.t;   // ONE leaf / a plain board
+const isDual = (c) => !!(c && c.type === 'vertical' && c.dual);
+const isBoxDivider = (c) => isDual(c) && c.a0 <= innerB() + 0.5 && c.a1 >= innerT() - 0.5;
+// Footprint a part occupies in the layout (cells, spans, hit-testing, drawing): a dual takes two board thicknesses.
+const partThick = (c) => panelThick(c) * (isDual(c) ? 2 : 1);
+// The carcass split into independent boxes by the full-height dual verticals, left → right. Per box:
+//   x0/x1       outer span (outer faces of its two sides) → the back panel / an outset cap spans this
+//   left/right  the span between its side panels          → an inset cap and a housed back span this
+//   openL/openR the same, but panel-aware: it reaches the carcass edge where a side has been DELETED,
+//               which is how the interior/openings have always been measured (innerL/innerR)
+//   L/R         its two side panels {on,x0,x1,thick,srcId}; a dual's leaves carry that divider's id
+// With no dual vertical this returns exactly one box == the classic cabinet, so every caller is unchanged.
+function boxSegments() {
+  const { w, t } = S.cab;
+  const divs = S.comps.filter(isBoxDivider).sort((a, b) => a.pos - b.pos);
+  const segs = [];
+  for (let i = 0; i <= divs.length; i++) {
+    const dl = i > 0 ? divs[i - 1] : null, dr = i < divs.length ? divs[i] : null;
+    const lt = dl ? panelThick(dl) : t, rt = dr ? panelThick(dr) : t;
+    const x0 = dl ? dl.pos : 0, x1 = dr ? dr.pos : w;   // a dual straddles its pos: left leaf below it, right leaf above
+    segs.push({
+      i, x0, x1,
+      left:  dl ? dl.pos + lt : t,
+      right: dr ? dr.pos - rt : w - t,
+      openL: dl ? dl.pos + lt : innerL(),
+      openR: dr ? dr.pos - rt : innerR(),
+      L: { on: dl ? true : sideLOn(), x0, x1: x0 + lt, thick: lt, srcId: dl ? dl.id : 'L' },
+      R: { on: dr ? true : sideROn(), x0: x1 - rt, x1, thick: rt, srcId: dr ? dr.id : 'R' },
+    });
+  }
+  return segs;
+}
+// A dual vertical ALWAYS spans the full interior — that is the only span which can carry a top and bottom per
+// box, so it is what makes "dual" mean separate boxes rather than a merely thicker divider. Enforced on load
+// (normalizeComps) and after every edit (resyncComponents), so the boxes survive changes that move the
+// envelope underneath it — deleting the top cap, resizing the cabinet, switching a cap to outset. For a thick
+// divider INSIDE one box, set the part's Thickness instead of ticking Dual.
+function seatDualFullHeight(c) {
+  if (!c || c.type !== 'vertical' || !c.dual) return;
+  c.a0 = innerB(); c.a1 = innerT();
+}
+// Suffix a carcass face id per box — a single box keeps the classic 'T'/'B'/'BK' so saved custom part names
+// (S.partNames) and existing selections stay valid; only a split carcass numbers them 'T1', 'T2', …
+const boxFaceId = (base, i, n) => n > 1 ? base + (i + 1) : base;
+// …and back again: 'T' → base 'T' box 0, 'BK2' → base 'BK' box 1. Every carcass-face consumer matches on the
+// base, so a split carcass keeps behaving like the unsplit one (mount/depth/delete apply to that face on all boxes).
+const faceBase = (id) => String(id).replace(/\d+$/, '');
+const faceBox = (id) => { const m = /(\d+)$/.exec(String(id)); return m ? Math.max(0, +m[1] - 1) : 0; };
+// Every side panel in the module: the cabinet's own left/right plus the two leaves of each dual vertical.
+// All are full-height panels, so identical ones merge into a single cut-list row (e.g. "Side ×8" for 4 boxes).
+function sidePieces() {
+  const out = [];
+  for (const b of boxSegments()) { if (b.L.on) out.push({ ...b.L, box: b.i }); if (b.R.on) out.push({ ...b.R, box: b.i }); }
+  return out;
+}
+// Top/bottom caps, ONE PIECE PER BOX: inset caps sit between that box's sides, outset caps run over them.
+function capPieces(which) {
+  if (!capOn(which)) return [];
+  const out = capOutset(which), base = which === 'top' ? 'T' : 'B', segs = boxSegments();
+  return segs.map((b) => {
+    const x0 = out ? b.x0 : b.left, x1 = out ? b.x1 : b.right;
+    return { x0, x1, len: Math.max(1, x1 - x0), srcId: boxFaceId(base, b.i, segs.length) };
+  });
+}
 // Cell (rectangle) containing point P, bounded by parts whose span crosses P. Excludes excludeId.
 // opts.ignoreShelves / opts.ignoreVerticals let a door span across those dividers (covering several cells).
 function cellAt(px, py, excludeId, opts) {
@@ -637,8 +717,22 @@ function resolvePartName(srcId, def) {
   if (typeof srcId === 'number') { const c = S.comps.find(x => x.id === srcId); if (c && c.type !== 'drawer' && c.customName) return c.customName; }
   return def;
 }
+// Panel colour / decor code for one cut-list part — the board it must be cut from. Three layers, most specific
+// wins: (1) this part's own override (S.partColours[srcId] for a carcass face, c.colourCode for a component),
+// (2) the code set for its part TYPE (carcass in one decor, fronts in another, back ply in a third — the usual
+// real-world case), (3) the module default. Drawers are skipped at layer 1 for the same reason as part names:
+// one drawer yields several sub-parts, and its fascia (key 'Door') and box (key 'DrawerBox') are normally
+// different boards — layer 2 already tells those apart. Empty everywhere ⇒ '' (column simply stays blank).
+function resolvePartColour(srcId, key) {
+  if (typeof srcId === 'string') { const o = S.partColours && S.partColours[srcId]; if (o != null && o !== '') return o; }
+  else if (typeof srcId === 'number') { const c = S.comps.find(x => x.id === srcId); if (c && c.type !== 'drawer' && c.colourCode) return c.colourCode; }
+  const col = S.colours || {};
+  const byType = col.parts && col.parts[key];
+  if (byType != null && byType !== '') return byType;
+  return col.default || '';
+}
 function cutListInstances() {
-  const { w, h, d, t, back } = S.cab;
+  const { d, t } = S.cab;   // the cabinet's own w/h no longer size any part directly — every carcass face is per box
   const items = [];
   // Banded edges reduce the raw cut size (finished − tape thickness). `flen`/`fwid` keep the finished size for reference.
   // Each part carries spatial dims w/h/d (left-right / top-bottom / front-back) + thickness `thick`: `face` maps the
@@ -658,25 +752,39 @@ function cutListInstances() {
     const band = on.length ? on.map(e => edgeLabel(key, e)).join(', ') + (doorBand != null ? ` · ${bt} mm` : '') : '—';
     const tapeLen = (eL1 ? length : 0) + (eL2 ? length : 0) + (eW1 ? width : 0) + (eW2 ? width : 0);
     const ax = { W: thick, H: thick, D: thick }; ax[face[0]] = cutL; ax[face[1]] = cutW;
-    items.push({ name, key, srcId, face, flen: length, fwid: width, length: cutL, width: cutW, w: ax.W, h: ax.H, d: ax.D, thick, band, tapeLen, bandThick: bt });
+    const colour = resolvePartColour(srcId, key);   // the board this part is cut from — see resolvePartColour
+    items.push({ name, key, srcId, face, flen: length, fwid: width, length: cutL, width: cutW, w: ax.W, h: ax.H, d: ax.D, thick, band, tapeLen, bandThick: bt, colour });
   };
-  // Sides span the cabinet height × depth; the board thickness is their left-right width. Skip removed sides.
-  if (sideLOn()) add('Side', 'Side', sideHeight(), d, 'L', 'HD', t);
-  if (sideROn()) add('Side', 'Side', sideHeight(), d, 'R', 'HD', t);
-  // Top/bottom caps span the cabinet width (inset = w-2t, outset = w) × the cap's own depth; thickness is their height. Skip removed caps.
-  const topOn = capOn('top'), botOn = capOn('bottom');
-  const topLen = capWidth('top'), topW = capDepth('top'), botLen = capWidth('bottom'), botW = capDepth('bottom');
-  if (topOn && botOn && topLen === botLen && topW === botW) {   // both present & identical: grouped "Top / Bottom" (qty 2)
-    add('Top / Bottom', 'TopBottom', topLen, topW, 'T', 'WD', t); add('Top / Bottom', 'TopBottom', botLen, botW, 'B', 'WD', t);
-  } else {                                                      // otherwise list whichever are present, separately (own keys so each auto-bands on its own mount)
-    if (topOn) add('Top', 'Top', topLen, topW, 'T', 'WD', t);
-    if (botOn) add('Bottom', 'Bottom', botLen, botW, 'B', 'WD', t);
+  // Sides span the cabinet height × depth; the board thickness is their left-right width. ONE PAIR PER BOX:
+  // with no dual vertical that is the classic left + right, and each dual vertical adds the two touching sides
+  // of the boxes it separates. Every side is keyed 'Side' — interior box sides are exposed on exactly the same
+  // edges as the outer ones (front always, top/bottom at the carcass ends), so they band the same and identical
+  // panels merge into one row, e.g. "Side ×8" for four boxes.
+  for (const s of sidePieces()) add('Side', 'Side', sideHeight(), d, s.srcId, 'HD', s.thick);
+  // Top/bottom caps span their OWN box (inset = that box's opening, outset = its outer width) × the cap's own
+  // depth; thickness is their height. Caps are paired per box so each box reads as a complete carcass.
+  const tops = capPieces('top'), bots = capPieces('bottom'), topW = capDepth('top'), botW = capDepth('bottom');
+  for (let i = 0; i < Math.max(tops.length, bots.length); i++) {
+    const tp = tops[i], bp = bots[i];
+    if (tp && bp && Math.abs(tp.len - bp.len) < 0.5 && topW === botW) {   // both present & identical: grouped "Top / Bottom" (qty 2)
+      add('Top / Bottom', 'TopBottom', tp.len, topW, tp.srcId, 'WD', t); add('Top / Bottom', 'TopBottom', bp.len, botW, bp.srcId, 'WD', t);
+    } else {                                                             // otherwise list whichever are present, separately (own keys so each auto-bands on its own mount)
+      if (tp) add('Top', 'Top', tp.len, topW, tp.srcId, 'WD', t);
+      if (bp) add('Bottom', 'Bottom', bp.len, botW, bp.srcId, 'WD', t);
+    }
   }
-  // Back panel spans the cabinet width × height; thickness is its own (thinner) board depth.
-  if (back) { const g = backGeom(); add('Back', 'Back', g.L, g.W, 'BK', 'WH', S.backPanel.thickness); }
+  // Back panel spans its box's width × the cabinet height; thickness is its own (thinner) board depth.
+  for (const g of backPieces()) add('Back', 'Back', g.L, g.W, g.srcId, 'WH', S.backPanel.thickness);
   for (const c of S.comps) {
     if (c.type === 'shelf') for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c), c.id, 'WD', partThick(c));
-    else if (c.type === 'vertical') for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c), c.id, 'HD', partThick(c));
+    else if (c.type === 'vertical') {
+      // A box divider was already listed above as the two box sides it forms — never double-count it here.
+      // seatDualFullHeight keeps every dual full-height, so the second branch only guards a hand-edited
+      // design: a dual that somehow is not a box divider is still two boards, so it lists as two rows.
+      if (isBoxDivider(c)) continue;
+      for (let k = isDual(c) ? 2 : 1; k > 0; k--)
+        for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c), c.id, 'HD', panelThick(c));
+    }
     else if (c.type === 'drawer') for (const p of drawerParts(c)) add(p.name, p.key, p.length, p.width, c.id, p.face, p.t);
   }
   for (const r of doorRects()) { const dc = S.comps.find(x => x.id === r.id); add('Door', 'Door', r.y1 - r.y0, r.x1 - r.x0, r.id, 'HW', t, doorBandThick(dc)); }
@@ -689,7 +797,10 @@ function cutListInstances() {
   }
   return items;
 }
-const groupKey = (it) => `${it.name}|${Math.round(it.length)}|${Math.round(it.width)}|${Math.round(it.thick || 0)}|${it.key}`;
+// Two identical panels in DIFFERENT colours are different boards, so they must stay separate rows — the colour
+// code is part of the group identity, not a display-only annotation. Appended only when a code is actually set,
+// so a design with no colours keeps exactly the keys it has always had.
+const groupKey = (it) => `${it.name}|${Math.round(it.length)}|${Math.round(it.width)}|${Math.round(it.thick || 0)}|${it.key}` + (it.colour ? `|${it.colour}` : '');
 // Map each cut-list group back to a representative design part id, so clicking a cutlist row
 // or a sheet piece can select the matching component/face in the 2D/3D design.
 function groupKeyToSrc() {
@@ -759,7 +870,7 @@ function renderCutList() {
   const tbody = document.querySelector('#cutlist tbody');
   tbody.innerHTML = parts.map(p => {
     const bn = job ? (p.band || '—') : bandNotation(p.key);
-    return `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${escapeHtml(p.name)}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${bn}</td></tr>`;
+    return `<tr data-gkey="${groupKey(p)}"${selKeys.has(groupKey(p)) ? ' class="cl-selected"' : ''}><td>${escapeHtml(p.name)}</td><td>${p.qty}</td><td>${fmt(p.w)}</td><td>${fmt(p.h)}</td><td>${fmt(p.d)}</td><td>${fmt(p.thick)}</td><td>${bn}</td><td>${escapeHtml(p.colour || '—')}</td></tr>`;
   }).join('');
   const ths = document.querySelectorAll('#cutlist thead th');
   ths[2].textContent = `Width (${S.unit})`; ths[3].textContent = `Height (${S.unit})`; ths[4].textContent = `Depth (${S.unit})`; ths[5].textContent = `Thick (${S.unit})`;
@@ -782,12 +893,31 @@ function renderCutList() {
 }
 
 // ---------- Sheet nesting (FFDH shelf packing) ----------
+// Parts are nested per COLOUR: a sheet is one physical board, so panels in different decors can never share
+// one. Items are grouped by their colour code and each group packed independently, then the sheets are
+// concatenated (each tagged with its colour) and utilisation is taken over the whole set. With one colour —
+// including the default of none set anywhere — there is a single group, so the packing is bit-for-bit what it
+// has always been.
 function nest(items) {
+  const groups = new Map();
+  for (const it of items) { const c = it.colour || ''; if (!groups.has(c)) groups.set(c, []); groups.get(c).push(it); }
+  if (groups.size <= 1) return nestOne(items, items.length ? (items[0].colour || '') : '');
+  const sheets = [];
+  let partArea = 0;
+  let SW = S.sheet.w, SH = S.sheet.h;
+  for (const [colour, group] of groups) {
+    const pack = nestOne(group, colour);
+    sheets.push(...pack.sheets); partArea += pack.partArea; SW = pack.SW; SH = pack.SH;
+  }
+  const sheetArea = sheets.length * SW * SH;
+  return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH, partArea };
+}
+function nestOne(items, colour) {
   const { w: SW, h: SH, kerf } = S.sheet, lock = S.grainLock;
   const rects = items.map(it => ({ name: it.name, len: it.length, wid: it.width, gkey: groupKey(it), srcId: it.srcId }));
   rects.sort((a, b) => Math.max(b.len, b.wid) - Math.max(a.len, a.wid));
   const sheets = [];
-  const newSheet = () => { const s = { levels: [], placements: [] }; sheets.push(s); return s; };
+  const newSheet = () => { const s = { levels: [], placements: [], colour: colour || '' }; sheets.push(s); return s; };
   const tryFootprint = (sheet, fw, fh) => {
     for (const lvl of sheet.levels) if (lvl.x + fw <= SW && fh <= lvl.h) { const p = { x: lvl.x, y: lvl.y, w: fw, h: fh }; lvl.x += fw + kerf; return p; }
     const top = sheet.levels.length ? (sheet.levels.at(-1).y + sheet.levels.at(-1).h + kerf) : 0;
@@ -808,7 +938,7 @@ function nest(items) {
   }
   const partArea = rects.reduce((a, r) => a + r.len * r.wid, 0);
   const sheetArea = sheets.length * SW * SH;
-  return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH };
+  return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH, partArea };
 }
 
 // ---------- Scale bar (adaptive ruler) ----------
@@ -899,6 +1029,9 @@ function drawModuleDims2D(m, worldToScreen) {
 function partRect(c) {
   const ht = partThick(c) / 2;
   if (c.type === 'shelf') return { x0: c.a0, x1: c.a1, y0: c.pos - ht, y1: c.pos + ht };
+  // A box divider IS the two boxes' side panels, so it runs the full side height (past the caps, which are
+  // now per-box and sit between it and the next side) — not just the interior span its cell math uses.
+  if (isBoxDivider(c)) return { x0: c.pos - ht, x1: c.pos + ht, y0: sideY0(), y1: sideY1() };
   return { x0: c.pos - ht, x1: c.pos + ht, y0: c.a0, y1: c.a1 };
 }
 function clampComp(c) {
@@ -1134,17 +1267,25 @@ function renderDesign() {
   // shows the back panel's wood ONLY when a back is fitted; with no back the carcass is open (dark).
   const field = S.cab.back ? D2D.field : CANVAS_BG;
   dimMask = field;
-  fillRectMM(dctx, { x0: innerL(), x1: innerR(), y0: innerB(), y1: innerT() }, field, null);
+  // Interior field, per box — it IS the back panel in this elevation, so each rect carries its own back's id
+  // and stays independently selectable once a dual vertical has split the carcass.
+  const segs = boxSegments();
+  segs.forEach((b, i) => fillRectMM(dctx, { x0: b.openL, x1: b.openR, y0: innerB(), y1: innerT(), id: S.cab.back ? boxFaceId('BK', i, segs.length) : null }, field, null));
   const wall = D2D.frame, wline = D2D.frameLine;
-  const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
-  if (sideLOn()) fillRectMM(dctx, { x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
-  if (sideROn()) fillRectMM(dctx, { x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
-  if (capOn('bottom')) fillRectMM(dctx, { x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
-  if (capOn('top')) fillRectMM(dctx, { x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
+  const sy0 = sideY0(), sy1 = sideY1();
+  // Sides (cabinet ends + the leaves of every dual vertical) and per-box caps. Each rect is tagged with the
+  // part it draws so the thin client can select it and cross-highlight the cut list without guessing geometry.
+  for (const s of sidePieces()) {
+    const sel = s.srcId === S.selectedId;   // a dual's leaves carry its component id, so selecting it highlights both
+    fillRectMM(dctx, { x0: s.x0, x1: s.x1, y0: sy0, y1: sy1, id: s.srcId }, sel ? '#ffb454' : wall, sel ? '#ffd9a0' : wline);
+  }
+  for (const p of capPieces('bottom')) fillRectMM(dctx, { x0: p.x0, x1: p.x1, y0: 0, y1: t, id: p.srcId }, wall, wline);
+  for (const p of capPieces('top')) fillRectMM(dctx, { x0: p.x0, x1: p.x1, y0: h - t, y1: h, id: p.srcId }, wall, wline);
   dctx.save();   // soft drop shadow gives shelves/dividers/drawers depth against the brighter wood field
   dctx.shadowColor = 'rgba(0,0,0,0.4)'; dctx.shadowBlur = 6; dctx.shadowOffsetX = 1; dctx.shadowOffsetY = 3;
   for (const c of S.comps) {
     if (c.type === 'drawer') continue;
+    if (isBoxDivider(c)) continue;   // already drawn above, in the carcass colour, as the two box sides it is
     const sel = c.id === S.selectedId;
     fillRectMM(dctx, partRect(c), sel ? '#ffb454' : D2D.part, sel ? '#ffd9a0' : D2D.partEdge);
   }
@@ -1195,14 +1336,15 @@ function buildBoxes() {
   const boxes = [];
   const push = (x0, x1, y0, y1, z0, z1, base, id, alpha) => boxes.push({ x0, x1, y0, y1, z0, z1, base, id, alpha: alpha || 1 });
   const sy0 = sideY0(), sy1 = sideY1();
-  if (sideLOn()) push(0, t, sy0, sy1, 0, d, wood, 'L');
-  if (sideROn()) push(w - t, w, sy0, sy1, 0, d, wood, 'R');
-  if (capOn('bottom')) { const bX = capXRange('bottom'), bZ = capZRange('bottom'); push(bX.x0, bX.x1, 0, t, bZ.z0, bZ.z1, wood, 'B'); }
-  if (capOn('top')) { const tX = capXRange('top'), tZ = capZRange('top'); push(tX.x0, tX.x1, h - t, h, tZ.z0, tZ.z1, wood, 'T'); }
-  const bg = back ? backGeom() : null;
-  const zF = bg ? bg.front : 0;
-  if (bg) push(bg.x0, bg.x1, bg.y0, bg.y1, bg.z0, bg.z1, backCol, 'BK');
+  // Carcass shell, one set per box (a single box = the classic cabinet). Dual-vertical leaves come through
+  // sidePieces() carrying their divider's id, so clicking either face in 3D still selects that divider.
+  for (const s of sidePieces()) push(s.x0, s.x1, sy0, sy1, 0, d, wood, s.srcId);
+  { const bZ = capZRange('bottom'); for (const p of capPieces('bottom')) push(p.x0, p.x1, 0, t, bZ.z0, bZ.z1, wood, p.srcId); }
+  { const tZ = capZRange('top'); for (const p of capPieces('top')) push(p.x0, p.x1, h - t, h, tZ.z0, tZ.z1, wood, p.srcId); }
+  for (const g of backPieces()) push(g.x0, g.x1, g.y0, g.y1, g.z0, g.z1, backCol, g.srcId);
+  const zF = back ? backGeom().front : 0;
   for (const c of S.comps) {
+    if (isBoxDivider(c)) continue;   // already pushed as the two box sides it forms
     const z0 = Math.max(0, zF + (c.setback || 0));        // positioned from the back panel front face
     const z1 = Math.min(d, z0 + compDepth(c));
     const ht = partThick(c) / 2;
@@ -1511,16 +1653,15 @@ function drawModuleElevation(ctx, m, worldToScreen) {
   const p = modPlace(m);
   const tf = (xmm, ymm) => worldToScreen(p.offsetX + xmm, p.baseHeight + ymm);
   withModule(m, () => {
-    const { w, h, t } = S.cab, fillR = (r, f, s) => fillRectWorld(ctx, r, f, s, tf);
-    fillR({ x0: innerL(), x1: innerR(), y0: innerB(), y1: innerT() }, '#222831', null);
+    const { h, t } = S.cab, fillR = (r, f, s) => fillRectWorld(ctx, r, f, s, tf);
+    for (const b of boxSegments()) fillR({ x0: b.openL, x1: b.openR, y0: innerB(), y1: innerT() }, '#222831', null);
     const wall = '#6b7686', wline = '#aeb7c6';
-    const sy0 = sideY0(), sy1 = sideY1(), bX = capXRange('bottom'), tX = capXRange('top');
-    if (sideLOn()) fillR({ x0: 0, x1: t, y0: sy0, y1: sy1 }, wall, wline);
-    if (sideROn()) fillR({ x0: w - t, x1: w, y0: sy0, y1: sy1 }, wall, wline);
-    if (capOn('bottom')) fillR({ x0: bX.x0, x1: bX.x1, y0: 0, y1: t }, wall, wline);
-    if (capOn('top')) fillR({ x0: tX.x0, x1: tX.x1, y0: h - t, y1: h }, wall, wline);
+    const sy0 = sideY0(), sy1 = sideY1();
+    for (const s of sidePieces()) fillR({ x0: s.x0, x1: s.x1, y0: sy0, y1: sy1 }, wall, wline);
+    for (const p of capPieces('bottom')) fillR({ x0: p.x0, x1: p.x1, y0: 0, y1: t }, wall, wline);
+    for (const p of capPieces('top')) fillR({ x0: p.x0, x1: p.x1, y0: h - t, y1: h }, wall, wline);
     const Pe = woodPal();
-    for (const c of S.comps) { if (c.type === 'drawer') continue; fillR(partRect(c), Pe.p2d, Pe.e2d); }
+    for (const c of S.comps) { if (c.type === 'drawer' || isBoxDivider(c)) continue; fillR(partRect(c), Pe.p2d, Pe.e2d); }
     for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFascias(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, Pe.p2d, Pe.e2d);
     for (const r of doorRects()) fillR({ x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y1 }, 'rgba(190,160,105,0.30)', '#d9c08a');
   });
@@ -1835,6 +1976,7 @@ function resyncComponents() {
     if (c.type === 'shelf' || c.type === 'vertical') {
       const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
       c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi));
+      seatDualFullHeight(c);   // a dual divider keeps splitting the carcass whatever the envelope does
     }
     if (c.depth != null) c.depth = Math.min(c.depth, S.cab.d);
     if (c.setback != null) c.setback = Math.min(c.setback, S.cab.d);
@@ -1871,7 +2013,9 @@ function readInputs() {
 }
 
 // ---------- Component actions ----------
-function addComp(type) {
+// `dual` (verticals only) creates the part as a DUAL panel — two boards face-to-face that split the carcass
+// into separate boxes, each with its own top, bottom, back and pair of sides.
+function addComp(type, dual) {
   if (!JOB.modules.length) return;
   const { w, h, t } = S.cab;
   const p = S.lastPoint || { x: w / 2, y: h / 2 };
@@ -1921,7 +2065,12 @@ function addComp(type) {
   const cell = cellAt(p.x, p.y, null);
   const c = { id: S._seq++, type };
   if (type === 'shelf') { c.a0 = cell.left; c.a1 = cell.right; c.pos = (cell.bottom + cell.top) / 2; }
-  else { c.a0 = cell.bottom; c.a1 = cell.top; c.pos = (cell.left + cell.right) / 2; }
+  else {
+    c.a0 = cell.bottom; c.a1 = cell.top; c.pos = (cell.left + cell.right) / 2;
+    // A dual vertical is added full-height (spanning the interior) so it actually splits the carcass into
+    // separate boxes — a dual confined to one cell would only be a thick divider.
+    if (dual) { c.dual = true; c.a0 = innerB(); c.a1 = innerT(); }
+  }
   clampComp(c); S.comps.push(c); S.selectedId = c.id; render();
 }
 const drawerCount = () => { const v = parseInt(($('in-drawer-count') || {}).value, 10) || 1; return Math.max(1, Math.min(12, v)); };
@@ -1942,11 +2091,13 @@ function deleteSelected() {
     if (comp && comp.type === 'drawer' && Array.isArray(comp.flanks)) comp.flanks.forEach(fid => remove.add(fid));
     S.comps = S.comps.filter(c => !remove.has(c.id));
   }
-  else if (id === 'T') { if (S.cab.top) S.cab.top.on = false; }             // carcass panels: flag off (restore via setup toggles)
-  else if (id === 'B') { if (S.cab.bottom) S.cab.bottom.on = false; }
+  // Carcass panels: flag off (restore via setup toggles). On a split carcass the flag is module-wide, so the
+  // face is removed from every box — matching how it is switched on in Setup.
+  else if (faceBase(id) === 'T') { if (S.cab.top) S.cab.top.on = false; }
+  else if (faceBase(id) === 'B') { if (S.cab.bottom) S.cab.bottom.on = false; }
   else if (id === 'L') S.cab.sideL = false;
   else if (id === 'R') S.cab.sideR = false;
-  else if (id === 'BK') S.cab.back = false;
+  else if (faceBase(id) === 'BK') S.cab.back = false;
   else return;   // unknown/undeletable
   S.selectedId = null; syncInputs(); render();
 }
@@ -1954,12 +2105,15 @@ function deleteSelected() {
 // ---------- Selected-component editor ----------
 // Fixed carcass/door parts (selected by clicking a face in 3D) have a string id; report their size read-only.
 function carcassPartInfo(id) {
-  const { d, t } = S.cab;
-  // Spatial w/h/d (left-right / top-bottom / front-back) + board thickness for each fixed part.
-  if (id === 'L' || id === 'R') return { name: 'Side', w: t, h: sideHeight(), d, thick: t };
-  if (id === 'T') return { name: 'Top', w: capWidth('top'), h: t, d: capDepth('top'), thick: t };
-  if (id === 'B') return { name: 'Bottom', w: capWidth('bottom'), h: t, d: capDepth('bottom'), thick: t };
-  if (id === 'BK') { if (!S.cab.back) return null; const g = backGeom(); return { name: 'Back', w: g.L, h: g.W, d: S.backPanel.thickness, thick: S.backPanel.thickness }; }
+  const { d, t } = S.cab, base = faceBase(id), bi = faceBox(id);
+  // Spatial w/h/d (left-right / top-bottom / front-back) + board thickness for each fixed part. On a carcass
+  // split by dual verticals the id carries its box number, so each box's own cap/back size is reported.
+  if (base === 'L' || base === 'R') return { name: 'Side', w: t, h: sideHeight(), d, thick: t };
+  if (base === 'T' || base === 'B') {
+    const which = base === 'T' ? 'top' : 'bottom', p = capPieces(which)[bi];
+    return p ? { name: base === 'T' ? 'Top' : 'Bottom', w: p.len, h: t, d: capDepth(which), thick: t } : null;
+  }
+  if (base === 'BK') { const g = backPieces()[bi]; return g ? { name: 'Back', w: g.L, h: g.W, d: S.backPanel.thickness, thick: S.backPanel.thickness } : null; }
   if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? { name: 'Door', w: r.x1 - r.x0, h: r.y1 - r.y0, d: t, thick: t } : null; }
   return null;
 }
@@ -2072,29 +2226,34 @@ function renderSelectionPanel() {
         `<option value="start"${sel('start')}>${isShelf ? 'Left' : 'Bottom'}</option>` +
         `<option value="center"${sel('center')}>${isShelf ? 'Center' : 'Middle'}</option>` +
         `<option value="end"${sel('end')}>${isShelf ? 'Right' : 'Top'}</option></select></label>` +
-      row('sel-thick', 'Thickness', fmt(partThick(comp))) +
+      row('sel-thick', 'Thickness', fmt(panelThick(comp))) +   // ONE board — a dual is two of these
       row('sel-depth', 'Depth', fmt(compDepth(comp))) +
-      row('sel-setback', 'Setback from back', fmt(comp.setback || 0));
+      row('sel-setback', 'Setback from back', fmt(comp.setback || 0)) +
+      // Dual panel: two boards face-to-face, splitting the carcass into separate boxes (own top/bottom/back each).
+      (isShelf ? '' : `<label class="sel-row"><span>Dual panel</span><input type="checkbox" id="sel-dual"${comp.dual ? ' checked' : ''}></label>`);
     const segs = isShelf ? shelfSegments(comp) : verticalSegments(comp), usable = usableDepth();
     derived.textContent =
+      (isBoxDivider(comp) ? `Dual panel — splits the carcass; each box gets its own top, bottom & back · ` :
+       isDual(comp) ? `Dual panel (two boards) — full height is needed to split the carcass into boxes · ` : '') +
       (segs.length > 1 ? `Cut into ${segs.length} pieces · ` : '') +
       (comp.depth != null ? 'Custom depth' : `Depth = usable ${fmtU(usable)}`) +
       ` · Setback = gap from the back panel front face.` +
       bandInfo(isShelf ? 'Shelf' : 'Vertical');
     actions.classList.remove('hidden');
-  } else if (id === 'T' || id === 'B') {
+  } else if (faceBase(id) === 'T' || faceBase(id) === 'B') {
     // Editable top/bottom cap — same props as the setup card, reachable by selecting the panel in 2D/3D/cut list.
-    const which = id === 'T' ? 'top' : 'bottom', cap = capOf(which);
+    const which = faceBase(id) === 'T' ? 'top' : 'bottom', cap = capOf(which);
     const mnt = capOutset(which) ? 'outset' : 'inset', anc = cap.anchor || 'back';
     const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
     const optA = (v, lbl) => `<option value="${v}"${anc === v ? ' selected' : ''}>${lbl}</option>`;
+    const capPc = capPieces(which)[faceBox(id)];
     title.innerHTML = `${which === 'top' ? 'Top' : 'Bottom'} panel <small>(${u})</small>`;
     fields.innerHTML =
       nameRow(id, which === 'top' ? 'Top' : 'Bottom') +
       `<label class="sel-row"><span>Mount</span><select id="sel-cap-mount">${optM('inset', 'Inset (between sides)')}${optM('outset', 'Outset (over sides)')}</select></label>` +
       row('sel-cap-depth', 'Depth', fmt(capDepth(which))) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-cap-anchor">${optA('back', 'Back')}${optA('center', 'Center')}${optA('front', 'Front')}</select></label>`;
-    derived.textContent = `Panel ${fmtU(capWidth(which))} × ${fmtU(capDepth(which))} · ${mnt}. Sides now ${fmtU(sideHeight())}. Depth = full ⇒ aligned to sides. Delete removes it (restore in Setup).`;
+    derived.textContent = `Panel ${fmtU(capPc ? capPc.len : 0)} × ${fmtU(capDepth(which))} · ${mnt}. Sides now ${fmtU(sideHeight())}. Depth = full ⇒ aligned to sides. Delete removes it (restore in Setup).`;
     actions.classList.remove('hidden');   // both Update and Delete available
   } else {
     const info = carcassPartInfo(id);
@@ -2253,6 +2412,13 @@ function applySelectedEdit() {
   // Setback from the back panel front face (0 = sits against the back).
   const setback = get('sel-setback');
   if (setback > 0.5) c.setback = Math.max(0, Math.min(setback, S.cab.d)); else delete c.setback;
+  // Dual panel — turning it on makes this vertical two boards and, when it runs the full interior height,
+  // a carcass boundary: the caps and back split into a separate set per box (see boxSegments).
+  const dualEl = $('sel-dual');
+  if (dualEl && c.type === 'vertical') {
+    if (dualEl.checked) c.dual = true; else delete c.dual;
+    seatDualFullHeight(c);   // a dual always runs the full interior, so the Height field above does not apply to it
+  }
   clampComp(c); render();   // recalculates cut list, sheets, BOM
 }
 
@@ -2294,11 +2460,10 @@ function hitTest(mx, my) {
     const r = partRect(c); if (mx >= r.x0 - tol && mx <= r.x1 + tol && my >= r.y0 - tol && my <= r.y1 + tol) return c;
   }
   // Carcass rails (top/bottom caps + sides): fall through to these only if no component was hit.
-  const { w, h, t } = S.cab, tX = capXRange('top'), bX = capXRange('bottom'), sy0 = sideY0(), sy1 = sideY1();
-  if (capOn('top') && my >= h - t - tol && my <= h + tol && mx >= tX.x0 - tol && mx <= tX.x1 + tol) return { id: 'T' };
-  if (capOn('bottom') && my >= -tol && my <= t + tol && mx >= bX.x0 - tol && mx <= bX.x1 + tol) return { id: 'B' };
-  if (sideLOn() && mx >= -tol && mx <= t + tol && my >= sy0 - tol && my <= sy1 + tol) return { id: 'L' };
-  if (sideROn() && mx >= w - t - tol && mx <= w + tol && my >= sy0 - tol && my <= sy1 + tol) return { id: 'R' };
+  const { h, t } = S.cab, sy0 = sideY0(), sy1 = sideY1();
+  for (const p of capPieces('top')) if (my >= h - t - tol && my <= h + tol && mx >= p.x0 - tol && mx <= p.x1 + tol) return { id: p.srcId };
+  for (const p of capPieces('bottom')) if (my >= -tol && my <= t + tol && mx >= p.x0 - tol && mx <= p.x1 + tol) return { id: p.srcId };
+  for (const s of sidePieces()) if (mx >= s.x0 - tol && mx <= s.x1 + tol && my >= sy0 - tol && my <= sy1 + tol) return { id: s.srcId };
   return null;
 }
 let drag = null;
@@ -2760,7 +2925,9 @@ inReveal.addEventListener('input', () => { S.doors.reveal = Math.max(0, toMM(par
 inExplode.addEventListener('input', () => { S.explode = parseFloat(inExplode.value) || 0; render(); });
 inDims.addEventListener('change', () => { S.showDims = inDims.checked; render(); });
 $('btn-add-shelf').addEventListener('click', () => addComp('shelf'));
-$('btn-add-vertical').addEventListener('click', () => addComp('vertical'));
+// "Dual panel" (when the host page offers the toggle) creates the vertical as two boards that split the
+// carcass into separate boxes; otherwise it is a plain divider inside the current box.
+$('btn-add-vertical').addEventListener('click', () => addComp('vertical', !!(($('in-vert-dual') || {}).checked)));
 $('btn-add-drawer').addEventListener('click', () => addComp('drawer'));
 // The header "Side panels" checkbox is the default for NEW drawers AND a live bulk toggle: flipping it adds/removes
 // the flanks on EVERY existing drawer at once (so it always visibly changes the design, no selection required).
@@ -2904,10 +3071,18 @@ function aiAddShelves(count, fromMM, toMM) {
   for (let k = 1; k <= n; k++) S.comps.push({ id: S._seq++, type: 'shelf', a0, a1, pos: lo + (hi - lo) * k / (n + 1) });
   S.selectedId = null; render(); return { ok: true, added: n };
 }
-function aiAddVerticals(count, fromMM, toMM) {
+function aiAddVerticals(count, fromMM, toMM, dual) {
   const a0 = fromMM != null ? fromMM : innerB(), a1 = toMM != null ? toMM : innerT();
-  const lo = innerL(), hi = innerR(), n = Math.max(1, Math.min(50, count | 0));
-  for (let k = 1; k <= n; k++) S.comps.push({ id: S._seq++, type: 'vertical', a0, a1, pos: lo + (hi - lo) * k / (n + 1) });
+  const n = Math.max(1, Math.min(50, count | 0));
+  // Dual verticals split the carcass, so equal BOXES (not equal gaps between dividers) is what "evenly spaced"
+  // means: n dividers make n+1 boxes, each consuming its own two sides, and the centres land on w·k/(n+1).
+  // Every box opening then comes out at w/(n+1) − 2t. Single verticals stay evenly spread across the interior.
+  const lo = dual ? 0 : innerL(), hi = dual ? S.cab.w : innerR();
+  for (let k = 1; k <= n; k++) {
+    const c = { id: S._seq++, type: 'vertical', a0, a1, pos: lo + (hi - lo) * k / (n + 1) };
+    if (dual) c.dual = true;
+    S.comps.push(c);
+  }
   S.selectedId = null; render(); return { ok: true, added: n };
 }
 function aiClearComponents() { S.comps = []; S.selectedId = null; render(); return { ok: true }; }

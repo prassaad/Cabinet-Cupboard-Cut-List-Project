@@ -220,6 +220,11 @@ body.no-modules .setup-empty { display: block; }
 .band-grid .bc { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .band-grid input { margin: 0; }
 
+/* Per-part-type panel colour / decor codes. Label left, free-text code right; blank inherits the code above. */
+.colour-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 5px 8px; align-items: center; font-size: 12px; margin-top: 10px; }
+.colour-grid .rl { color: var(--ink); }
+.colour-grid input { margin: 0; width: 100%; box-sizing: border-box; }
+
 .canvas-wrap { position: relative; flex: 1; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; min-height: 0; }
 #design-canvas { outline: none; }   /* focusable (tabindex) so Space-to-pan works, but no focus ring */
 /* Floating design tools (measure / dimensions / explode) — top-RIGHT overlay; each child pill shows/hides on its own,

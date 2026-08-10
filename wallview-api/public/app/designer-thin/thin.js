@@ -319,6 +319,11 @@
       const cxi = i % cols, cyi = Math.floor(i / cols);
       const ox = cxi * cellW + (cellW - SW * s) / 2, oy = cyi * cellH + (cellH - SH * s) / 2;
       sctx.strokeStyle = '#39424f'; sctx.lineWidth = 1; sctx.strokeRect(ox + 0.5, oy + 0.5, SW * s - 1, SH * s - 1);
+      // A sheet is one physical board, so name the colour it must be cut from when the job uses more than one.
+      if (sheet.colour) {
+        sctx.fillStyle = '#9aa3b2'; sctx.font = '11px system-ui, sans-serif'; sctx.textAlign = 'left'; sctx.textBaseline = 'bottom';
+        sctx.fillText(`#${i + 1} · ${sheet.colour}`, ox, oy - 2);
+      }
       for (const p of sheet.placements) {
         const hi = p.srcId != null && String(p.srcId) === String(selectedId);
         drawPlacement(sctx, p, ox, oy, s, true, { sheetNo: i + 1, highlight: hi });
@@ -410,7 +415,7 @@
     tb.innerHTML = (model.cutList || []).map((p) => {
       const src = p.srcId != null ? String(p.srcId) : '';
       const selCls = src !== '' && src === String(selectedId) ? ' class="cl-selected"' : '';
-      return `<tr data-src="${esc(src)}"${selCls}><td>${p.partNo != null ? p.partNo : ''}</td><td>${esc(p.name)}</td><td>${esc(p.module || '')}</td><td>${p.qty}</td><td>${fmtU(p.w)}</td><td>${fmtU(p.h)}</td><td>${fmtU(p.d)}</td><td>${fmtU(p.thick)}</td><td>${esc(p.band)}</td></tr>`;
+      return `<tr data-src="${esc(src)}"${selCls}><td>${p.partNo != null ? p.partNo : ''}</td><td>${esc(p.name)}</td><td>${esc(p.module || '')}</td><td>${esc(p.colour || '—')}</td><td>${p.qty}</td><td>${fmtU(p.w)}</td><td>${fmtU(p.h)}</td><td>${fmtU(p.d)}</td><td>${fmtU(p.thick)}</td><td>${esc(p.band)}</td></tr>`;
     }).join('');
     const t = model.totals || {}, sh = model.sheets || {};
     $('#cutlist-summary').innerHTML =
@@ -493,11 +498,14 @@
     .btbl th:first-child,.btbl td:first-child{text-align:left}.btot{margin-top:5mm;font-size:15px}`;
   const dimStr = (p) => `W ${fmtU(p.w)} · H ${fmtU(p.h)} · D ${fmtU(p.d)}`;
   function partLabelCell(p, piece) {
-    const qr = qrDataUrl(`WV|${p.module || ''}|${p.name}|#${p.partNo}|${Math.round(p.w)}x${Math.round(p.h)}x${Math.round(p.d)}x${Math.round(p.thick)}`);
+    // The colour code goes in the QR and on the face of the sticker: on the shop floor it is what tells the
+    // operator which board this panel comes off, so it must survive onto the physical label.
+    const col = p.colour || '';
+    const qr = qrDataUrl(`WV|${p.module || ''}|${p.name}|#${p.partNo}|${Math.round(p.w)}x${Math.round(p.h)}x${Math.round(p.d)}x${Math.round(p.thick)}${col ? '|' + col : ''}`);
     const qtyLine = piece ? `Piece ${piece.i} / ${piece.n}` : `Qty ${p.qty}`;
     return `<div class="lbl"><div class="info">
       <div class="nm">${esc(p.name)} <span class="no">#${p.partNo}</span></div>
-      <div class="mod">${esc(p.module || '')}</div>
+      <div class="mod">${esc(p.module || '')}${col ? ` · <b>${esc(col)}</b>` : ''}</div>
       <div class="dim">${dimStr(p)}<br>Thick ${fmtU(p.thick)}</div>
       <div class="qty">${qtyLine}</div>
     </div>${qr ? `<div class="qr"><img src="${qr}"></div>` : ''}</div>`;
@@ -518,11 +526,11 @@
     const u = curUnit();
     const total = items.reduce((a, x) => a + (x.qty | 0), 0);
     const mods = [...new Set(items.map((x) => x.module).filter(Boolean))].join(', ');
-    const rows = items.map((x) => `<tr><td>${esc(x.name)}</td><td>${fmtU(x.w)} × ${fmtU(x.h)} × ${fmtU(x.d)}</td><td>${fmtU(x.thick)}</td><td>${x.qty}</td></tr>`).join('');
+    const rows = items.map((x) => `<tr><td>${esc(x.name)}</td><td>${esc(x.colour || '—')}</td><td>${fmtU(x.w)} × ${fmtU(x.h)} × ${fmtU(x.d)}</td><td>${fmtU(x.thick)}</td><td>${x.qty}</td></tr>`).join('');
     const qr = qrDataUrl(`WV-BOX|${title}|${mods}|panels:${total}`);
     const body = `<div class="box-lbl">
       <div class="bhead"><div><div class="btitle">${esc(title)}</div><div class="bmod">${esc(mods)}</div></div>${qr ? `<img class="bqr" src="${qr}">` : ''}</div>
-      <table class="btbl"><thead><tr><th>Part</th><th>Size (${u})</th><th>Thick (${u})</th><th>Qty</th></tr></thead><tbody>${rows}</tbody></table>
+      <table class="btbl"><thead><tr><th>Part</th><th>Colour</th><th>Size (${u})</th><th>Thick (${u})</th><th>Qty</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="btot">Total panels in this box: <b>${total}</b></div>
     </div>`;
     openPrint('Box label — ' + title, BOX_CSS, body);
@@ -539,7 +547,7 @@
     const boxView = () => `<p class="hint">Tick the panels going into this box (lower a Qty to split a part across boxes), then print the box-content sticker. Repeat per box.</p>
       <label class="lb-title">Box label<input id="box-title" type="text" value="Box 1"></label>
       <div class="lb-actions"><button id="box-all" type="button">Select all</button><button id="box-none" type="button">Clear</button></div>
-      <div id="box-list">${list.map((p, i) => `<label class="box-row"><input type="checkbox" class="box-chk" data-i="${i}"><span class="bnm">${esc(p.name)} <span class="bmuted">· ${esc(p.module || '')} · ${dimStr(p)} · T ${fmtU(p.thick)}</span></span><input type="number" class="box-qty" data-i="${i}" min="0" max="${p.qty}" value="${p.qty}"></label>`).join('')}</div>
+      <div id="box-list">${list.map((p, i) => `<label class="box-row"><input type="checkbox" class="box-chk" data-i="${i}"><span class="bnm">${esc(p.name)} <span class="bmuted">· ${esc(p.module || '')}${p.colour ? ' · ' + esc(p.colour) : ''} · ${dimStr(p)} · T ${fmtU(p.thick)}</span></span><input type="number" class="box-qty" data-i="${i}" min="0" max="${p.qty}" value="${p.qty}"></label>`).join('')}</div>
       <div id="box-count" class="bmuted"></div>
       <button id="lbl-print-box" class="lb-print">🖨 Print box sticker</button>`;
     const render = () => {
@@ -592,8 +600,8 @@
 
   function exportCSV() {
     if (!model) return; const u = curUnit();
-    const rows = [['Part #', 'Part', 'Module', 'Qty', `Width (${u})`, `Height (${u})`, `Depth (${u})`, `Thick (${u})`, 'Banded edges']];
-    for (const p of model.cutList || []) rows.push([p.partNo != null ? p.partNo : '', p.name, `"${p.module || ''}"`, p.qty, fmtU(p.w), fmtU(p.h), fmtU(p.d), fmtU(p.thick), `"${p.band}"`]);
+    const rows = [['Part #', 'Part', 'Module', 'Colour code', 'Qty', `Width (${u})`, `Height (${u})`, `Depth (${u})`, `Thick (${u})`, 'Banded edges']];
+    for (const p of model.cutList || []) rows.push([p.partNo != null ? p.partNo : '', p.name, `"${p.module || ''}"`, `"${p.colour || ''}"`, p.qty, fmtU(p.w), fmtU(p.h), fmtU(p.d), fmtU(p.thick), `"${p.band}"`]);
     download('cutlist.csv', new Blob([rows.map((r) => r.join(',')).join('\n')], { type: 'text/csv' }));
   }
 
@@ -645,8 +653,8 @@
 
   function cutTableHTML() {
     const u = curUnit();
-    const rows = (model.cutList || []).map((p) => `<tr><td>${p.partNo != null ? p.partNo : ''}</td><td>${esc(p.name)}</td><td>${esc(p.module || '')}</td><td>${p.qty}</td><td>${fmtU(p.w)}</td><td>${fmtU(p.h)}</td><td>${fmtU(p.d)}</td><td>${fmtU(p.thick)}</td><td>${esc(p.band)}</td></tr>`).join('');
-    return `<table><thead><tr><th>#</th><th>Part</th><th>Module</th><th>Qty</th><th>W (${u})</th><th>H (${u})</th><th>D (${u})</th><th>Thick (${u})</th><th>Edges</th></tr></thead><tbody>${rows}</tbody></table>`;
+    const rows = (model.cutList || []).map((p) => `<tr><td>${p.partNo != null ? p.partNo : ''}</td><td>${esc(p.name)}</td><td>${esc(p.module || '')}</td><td>${esc(p.colour || '—')}</td><td>${p.qty}</td><td>${fmtU(p.w)}</td><td>${fmtU(p.h)}</td><td>${fmtU(p.d)}</td><td>${fmtU(p.thick)}</td><td>${esc(p.band)}</td></tr>`).join('');
+    return `<table><thead><tr><th>#</th><th>Part</th><th>Module</th><th>Colour</th><th>Qty</th><th>W (${u})</th><th>H (${u})</th><th>D (${u})</th><th>Thick (${u})</th><th>Edges</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
   function printDoc(title, bodyHTML) {
     const win = window.open('', '_blank'); if (!win) { toast('Allow pop-ups to export', true); return; }
@@ -710,8 +718,34 @@
     chk('in-bot-on', bot.on !== false); set('in-bot-mount', bot.mount || 'inset'); set('in-bot-depth', bot.depth); set('in-bot-anchor', bot.anchor || 'back');
     set('in-sw', sheet.w); set('in-sh', sheet.h); set('in-kerf', sheet.kerf); chk('in-grain', !!m.grainLock);
     set('in-reveal', (m.doors || {}).reveal);
+    populateColours(m);
     if ($('#unit-mm')) $('#unit-mm').classList.toggle('active', (m.unit || 'mm') === 'mm');
     if ($('#unit-in')) $('#unit-in').classList.toggle('active', m.unit === 'in');
+  }
+
+  // ── Panel colour / decor codes ──
+  // The board each panel is cut from. Three layers resolved by the engine (resolvePartColour), most specific
+  // first: the part's own code → its part-type code → the module default. This grid edits the middle layer;
+  // "All panels" above it is the default, and a single part is overridden from the selection panel.
+  // Keys match the engine's cut-list part keys exactly — that is what the per-type lookup is keyed on.
+  const COLOUR_TYPES = [
+    ['Side', 'Sides'], ['TopBottom', 'Tops & bottoms'], ['Back', 'Backs'],
+    ['Shelf', 'Shelves'], ['Vertical', 'Verticals'], ['Door', 'Doors & fronts'], ['DrawerBox', 'Drawer boxes'],
+    ['Extra', 'Extra pieces'],
+  ];
+  function populateColours(m) {
+    const grid = $('#colour-grid'); if (!grid) return;
+    const col = m.colours || {}, parts = col.parts || {};
+    const dflt = $('#in-colour-default'); if (dflt && document.activeElement !== dflt) dflt.value = col.default || '';
+    // Rebuild only when the row set is missing — otherwise just refresh values, so typing is never interrupted.
+    if (grid.children.length !== COLOUR_TYPES.length * 2) {
+      grid.innerHTML = COLOUR_TYPES.map(([k, label]) =>
+        `<span class="rl">${label}</span><input type="text" data-colour-key="${k}" placeholder="inherit">`).join('');
+    }
+    for (const el of grid.querySelectorAll('input[data-colour-key]')) {
+      if (document.activeElement === el) continue;
+      el.value = parts[el.dataset.colourKey] || '';
+    }
   }
 
   // ── Module bar (switch / add / rename / delete) ──
@@ -912,7 +946,7 @@
     // the cut list instead, exactly like the prototype.
     let best = null, bestRank = -1, bestArea = Infinity;
     for (const rc of model.module2d.rects) {
-      if (rc.srcId == null || String(rc.srcId) === 'BK') continue;
+      if (rc.srcId == null || /^BK\d*$/.test(String(rc.srcId))) continue;   // BK / BK1 / BK2 … one back per box
       if (xm < rc.x0 - tol || xm > rc.x1 + tol || ym < rc.y0 - tol || ym > rc.y1 + tol) continue;
       const rank = /^\d+$/.test(String(rc.srcId)) ? 1 : 0;   // 1 = component, 0 = carcass edge
       const area = Math.max(0, rc.x1 - rc.x0) * Math.max(0, rc.y1 - rc.y0);
@@ -950,6 +984,20 @@
   // carcass faces store it in the module (data-mpath=partNames.<id> → patch). Empty ⇒ the engine's default name.
   const nameRowComp = (val) => `<label class="sel-row"><span>Part name</span><input type="text" data-path="customName" value="${esc(val || '')}" placeholder="Custom name"></label>`;
   const nameRowCarcass = (id, val) => `<label class="sel-row"><span>Part name</span><input type="text" data-mpath="partNames.${id}" value="${esc(val || '')}" placeholder="Custom name"></label>`;
+  // "Colour code": overrides this ONE panel's board. Blank inherits its part-type code, then the module
+  // default (Setup ▸ Panel colour). Stored like the part name — on the component, or in the module for a
+  // carcass face. The placeholder shows what it currently inherits, so the field reads true when left empty.
+  const colourRowComp = (val, inherited) => `<label class="sel-row"><span>Colour code</span><input type="text" data-path="colourCode" value="${esc(val || '')}" placeholder="${esc(inherited || 'inherit')}"></label>`;
+  const colourRowCarcass = (id, val, inherited) => `<label class="sel-row"><span>Colour code</span><input type="text" data-mpath="partColours.${id}" value="${esc(val || '')}" placeholder="${esc(inherited || 'inherit')}"></label>`;
+
+  // What a part would show if its own colour override were blank: the code for its part TYPE, else the module
+  // default. Used as the placeholder so an empty field still reads true. `key` comes off the part's cut-list row.
+  const inheritedColour = (key) => {
+    const m = (design && design.modules && design.modules[active]) || {};
+    const col = m.colours || {};
+    return ((col.parts || {})[key] || col.default || '') || 'inherit';
+  };
+  const cutRowFor = (id) => (model.cutList || []).find((r) => String(r.srcId) === String(id)) || {};
 
   function showSelection(id) {
     const panel = $('#card-selected');
@@ -960,21 +1008,26 @@
       selectedId = id;
       const m = (design && design.modules && design.modules[active]) || { cab: {} }, cab = m.cab || {};
       const names = { L: 'Left side', R: 'Right side', T: 'Top panel', B: 'Bottom panel', BK: 'Back panel' };
-      const row = (model.cutList || []).find((r) => String(r.srcId) === String(id)) || {};
-      $('#sel-title').innerHTML = `${names[id] || 'Panel'} <small>(${curUnit()})</small>`;
+      // A carcass split by dual verticals has one top/bottom/back PER BOX, so the engine numbers those face
+      // ids ('T1', 'BK2', …). Strip the box number to know which kind of panel it is, and show it in the title.
+      const base = id.replace(/\d+$/, ''), boxNo = (/(\d+)$/.exec(id) || [])[1];
+      const row = cutRowFor(id);
+      $('#sel-title').innerHTML = `${names[base] || 'Panel'}${boxNo ? ` — box ${boxNo}` : ''} <small>(${curUnit()})</small>`;
       const pn = (m.partNames || {})[id];
-      if (id === 'T' || id === 'B') {
-        const which = id === 'T' ? 'top' : 'bottom', cap = cab[which] || {};
+      const pcol = (m.partColours || {})[id], colRow = colourRowCarcass(id, pcol, inheritedColour(row.key));
+      if (base === 'T' || base === 'B') {
+        const which = base === 'T' ? 'top' : 'bottom', cap = cab[which] || {};
         $('#sel-fields').innerHTML =
-          nameRowCarcass(id, pn)
+          nameRowCarcass(id, pn) + colRow
           + mOptRow(`cab.${which}.mount`, 'Mount', [['inset', 'Inset (between sides)'], ['outset', 'Outset (over sides)']], cap.mount || 'inset')
           + mNumRow(`cab.${which}.depth`, 'Depth', cap.depth)
           + mOptRow(`cab.${which}.anchor`, 'Anchor', [['back', 'Back'], ['center', 'Center'], ['front', 'Front']], cap.anchor || 'back');
         const sh = (model.module2d.sides || {}).height;
-        $('#sel-derived').textContent = `Panel ${fmtU(row.w || 0)} × ${fmtU(row.d || 0)} ${curUnit()} · ${cap.mount || 'inset'}. Sides now ${fmtU(sh || cab.h || 0)}. Depth = full ⇒ aligned to sides. Delete removes it (restore in Setup).`;
+        $('#sel-derived').textContent = `Panel ${fmtU(row.w || 0)} × ${fmtU(row.d || 0)} ${curUnit()} · ${cap.mount || 'inset'}. Sides now ${fmtU(sh || cab.h || 0)}. Depth = full ⇒ aligned to sides. Delete removes it (restore in Setup).`
+          + (boxNo ? ' Mount, depth and anchor apply to this panel in every box.' : '');
       } else {
         $('#sel-fields').innerHTML =
-          nameRowCarcass(id, pn)
+          nameRowCarcass(id, pn) + colRow
           + `<div class="sel-ro">Width <b>${fmtU(row.w || 0)}</b></div><div class="sel-ro">Height <b>${fmtU(row.h || 0)}</b></div><div class="sel-ro">Depth <b>${fmtU(row.d || 0)}</b></div><div class="sel-ro">Thickness <b>${fmtU(row.thick || 0)}</b></div>`;
         $('#sel-derived').textContent = 'Read-only size (set via the Setup Sizes). Delete removes this panel — restore it in Setup.';
       }
@@ -988,15 +1041,23 @@
     const label = { shelf: 'Shelf', vertical: 'Vertical', door: 'Door', drawer: 'Drawer' }[c.type] || 'Part';
     $('#sel-title').textContent = label;
     let html = '';
+    // Per-part colour override — the board this one panel is cut from. Not offered for drawers: one drawer
+    // yields several sub-parts whose boards legitimately differ (fascia vs box), which the per-TYPE codes
+    // already separate. Matches how custom part names work.
+    const colRowC = colourRowComp(c.colourCode, inheritedColour(cutRowFor(id).key));
     if (c.type === 'shelf' || c.type === 'vertical') {
       const isShelf = c.type === 'shelf';
-      html = nameRowComp(c.customName)
+      html = nameRowComp(c.customName) + colRowC
         + selRow('pos', isShelf ? 'Height (mm)' : 'Position (mm)', Math.round(c.pos || 0))
         + selRow('thick', 'Thickness (mm)', c.thick)
         + selRow('depth', 'Depth (mm)', c.depth)
-        + selRow('setback', 'Setback from back (mm)', c.setback || 0);
+        + selRow('setback', 'Setback from back (mm)', c.setback || 0)
+        // Dual panel = two boards face-to-face that split the cabinet into separate boxes. Ticking it takes
+        // the divider full height (the only span that can carry a top & bottom per box) and the cut list
+        // immediately resizes: 2 sides, its own top, bottom and back for each box.
+        + (isShelf ? '' : chkRow('dual', 'Dual panel (separate box)', !!c.dual));
     } else if (c.type === 'door') {
-      html = nameRowComp(c.customName)
+      html = nameRowComp(c.customName) + colRowC
         + optRow('count', 'Leaves', [[1, '1 door'], [2, '2 doors']], c.count || 1)
         + optRow('mount', 'Front', [['outset', 'Outset (overlay)'], ['inset', 'Inset']], c.mount || 'outset')
         + optRow('valign', 'Anchor', [['top', 'Top'], ['middle', 'Middle'], ['bottom', 'Bottom']], c.valign || 'bottom')
@@ -1024,7 +1085,8 @@
         + selRow('drawerSetup.caps.bottom.setback', 'Setback from rear', cap.setback);
     }
     $('#sel-fields').innerHTML = html;
-    $('#sel-derived').textContent = `${label} · id ${id}` + ((c.type === 'shelf' || c.type === 'vertical') ? ' · drag to move' : '');
+    $('#sel-derived').textContent = (c.type === 'vertical' && c.dual ? 'Dual panel — splits the cabinet into separate boxes, each with its own top, bottom & back · ' : '')
+      + `${label} · id ${id}` + ((c.type === 'shelf' || c.type === 'vertical') ? ' · drag to move' : '');
     const su = $('#sel-update'); if (su) su.style.display = 'none';   // live edits apply on change
     panel.classList.remove('hidden');
     markCutRows(); redraw();
@@ -1286,6 +1348,15 @@
     onChange('in-kerf', () => patch({ sheet: { kerf: num('in-kerf') } }));
     onChange('in-grain', () => patch({ grainLock: chkv('in-grain') }));
 
+    // Panel colour codes — module default + the per-part-type grid. Free text (codes are supplier-specific),
+    // trimmed; blank clears the override so that type inherits the default again.
+    onChange('in-colour-default', () => patch({ colours: { default: ($('#in-colour-default').value || '').trim() } }));
+    const cg = $('#colour-grid');
+    if (cg) cg.addEventListener('change', (e) => {
+      const el = e.target.closest('input[data-colour-key]'); if (!el) return;
+      patch({ colours: { parts: { [el.dataset.colourKey]: (el.value || '').trim() } } });
+    });
+
     // Module add / rename panel
     onClick('mod-add-confirm', confirmModPanel);
     onClick('mod-add-cancel', () => $('#module-add-panel').classList.add('hidden'));
@@ -1309,7 +1380,13 @@
     const pt = () => lastClickMM;
     const divN = () => Math.max(1, Math.min(20, +(($('#in-div-count') || {}).value || 1)));
     onClick('btn-add-shelf', () => { const n = divN(); n > 1 ? editIntent('add_shelves', { count: n }) : editIntent('add_comp', { type: 'shelf', point: pt() }); });
-    onClick('btn-add-vertical', () => { const n = divN(); n > 1 ? editIntent('add_verticals', { count: n }) : editIntent('add_comp', { type: 'vertical', point: pt() }); });
+    // "Dual" makes the vertical two boards face-to-face that SPLIT the carcass: each side of it becomes an
+    // independent box with its own top, bottom, back and pair of sides. With × N the engine spaces them for
+    // equal boxes (each opening = w/(N+1) − 2×thickness), not merely equal gaps.
+    onClick('btn-add-vertical', () => {
+      const n = divN(), dual = chkv('in-vert-dual');
+      n > 1 ? editIntent('add_verticals', { count: n, dual }) : editIntent('add_comp', { type: 'vertical', point: pt(), dual });
+    });
     onClick('btn-add-drawer', () => editIntent('add_comp', {
       type: 'drawer', point: pt(),
       count: +(($('#in-drawer-count') || {}).value || 1), sides: chkv('in-drawer-sides'), front: chkv('in-drawer-front'),
@@ -1321,8 +1398,11 @@
     const del = () => {
       if (selectedId == null) return; const id = selectedId; clearSelection();
       if (typeof id === 'string') {   // carcass panel — remove via a config patch (restore in Setup)
+        // The flags are module-wide, so on a carcass split by dual verticals the face goes from every box —
+        // matching how it is switched back on in Setup. Strip the box number ('T2' → 'T') to find the flag.
         const map = { L: { cab: { sideL: false } }, R: { cab: { sideR: false } }, T: { cab: { top: { on: false } } }, B: { cab: { bottom: { on: false } } }, BK: { cab: { back: false } } };
-        if (map[id]) editIntent('patch', { patch: map[id] });
+        const patch = map[id.replace(/\d+$/, '')];
+        if (patch) editIntent('patch', { patch });
         return;
       }
       editIntent('delete', { id });

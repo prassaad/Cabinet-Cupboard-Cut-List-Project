@@ -32,6 +32,7 @@
         <div class="btn-row">
           <button id="btn-add-shelf" type="button">+ Shelf</button>
           <button id="btn-add-vertical" type="button">+ Vertical</button>
+          <label class="chk" title="Dual panel: the vertical is TWO boards face-to-face, splitting the cabinet into separate boxes. Each box gets its own top, bottom, back and pair of sides, and the cut list resizes to match. Leave off for a single divider inside one box."><input id="in-vert-dual" type="checkbox" /> Dual</label>
           <label class="qty" title="How many to add, spaced EVENLY across the interior for equal, symmetric divisions. Leave at 1 to insert a single part into the cell you clicked.">× <input id="in-div-count" type="number" min="1" max="20" step="1" value="1" /></label>
         </div>
         <div class="btn-row drawer-row">
@@ -242,6 +243,17 @@
               <p class="hint">Defines the panel size and blade width used to nest parts in the Sheet layout tab.</p>
             </section>
 
+            <section class="card" id="card-colours">
+              <h2>Panel colour <small>decor / colour code</small></h2>
+              <label>All panels <input id="in-colour-default" type="text" placeholder="e.g. U999 ST9" /></label>
+              <div id="colour-grid" class="colour-grid"></div>
+              <p class="hint">The board each panel is cut from. Set one code for the whole cabinet, then override
+                the part types that differ — carcass in one decor, fronts in another, back ply in a third. Leave a
+                type blank to inherit the code above. A single panel can be overridden by selecting it in the Design
+                view. The code shows in the cut list, on the labels and in the exports, and panels of different
+                colours are nested on separate sheets.</p>
+            </section>
+
             <section class="card">
               <h2>Edge banding <small>L=length · W=width edges</small></h2>
               <label>Tape thickness
@@ -339,7 +351,7 @@
         <div class="table-wrap">
           <table id="cutlist">
             <thead>
-              <tr><th>#</th><th>Part</th><th>Module</th><th>Qty</th><th>Width</th><th>Height</th><th>Depth</th><th>Thick</th><th>Edges</th></tr>
+              <tr><th>#</th><th>Part</th><th>Module</th><th>Colour</th><th>Qty</th><th>Width</th><th>Height</th><th>Depth</th><th>Thick</th><th>Edges</th></tr>
             </thead>
             <tbody></tbody>
           </table>

@@ -102,19 +102,10 @@ function loadEngine(appSrc) {
       try { openings = enumerateOpenings().map(function (c) { return { left: c.left, right: c.right, bottom: c.bottom, top: c.top }; }); } catch (e) {}
       var sides = null;
       try { sides = { height: sideHeight(), y0: sideY0(), y1: sideY1() }; } catch (e) {}
-      // Tag carcass rects (sides/caps/back) by geometry so the thin client can
-      // select them + cross-highlight from the cut list (they carry no id).
-      try {
-        var _t = S.cab.t, _w = S.cab.w, _h = S.cab.h, _e = 0.6, near = function (a, b) { return Math.abs(a - b) < _e; };
-        for (var ri = 0; ri < rects.length; ri++) {
-          var rr = rects[ri]; if (rr.srcId != null) continue;
-          if (near(rr.x0, 0) && near(rr.x1, _t)) rr.srcId = 'L';
-          else if (near(rr.x1, _w) && near(rr.x0, _w - _t)) rr.srcId = 'R';
-          else if (near(rr.y0, 0) && near(rr.y1, _t)) rr.srcId = 'B';
-          else if (near(rr.y1, _h) && near(rr.y0, _h - _t)) rr.srcId = 'T';
-          else if (S.cab.back && rr.fill && (rr.x1 - rr.x0) > _t * 2 && (rr.y1 - rr.y0) > _t * 2) rr.srcId = 'BK';
-        }
-      } catch (e) {}
+      // Carcass rects (sides/caps/back) are tagged at the source: renderDesign puts the part's own id on
+      // each rect it draws, so the thin client can select them + cross-highlight from the cut list. A
+      // carcass split by dual verticals has several tops/bottoms/backs, so geometry alone cannot identify
+      // them — the id must come from the engine, never be guessed here.
       // Door + drawer handles (mm positions; the client draws them screen-space).
       var handles = [];
       try {
@@ -193,11 +184,12 @@ function loadEngine(appSrc) {
         case 'apply_preset':   aiApplyPreset(args.name); break;
         case 'set_doors':      aiSetDoors(args.count, args.reveal); break;
         case 'add_shelves':    aiAddShelves(args.count); break;
-        case 'add_verticals':  aiAddVerticals(args.count); break;
+        case 'add_verticals':  aiAddVerticals(args.count, null, null, !!args.dual); break;
         case 'add_comp': {
-          // Insert a component into the clicked cell (real addComp: cell-bounded).
+          // Insert a component into the clicked cell (real addComp: cell-bounded). args.dual (verticals
+          // only) makes it a dual panel: two boards that split the carcass into separate boxes.
           S.lastPoint = (args.point && args.point.x != null) ? { x: args.point.x, y: args.point.y } : null;
-          addComp(args.type);
+          addComp(args.type, !!args.dual);
           var nc = (typeof S.selectedId === 'number') ? S.comps.find(function (c) { return c.id === S.selectedId; }) : null;
           if (nc) {
             if (args.type === 'door' && args.count) { nc.count = Math.max(1, Math.min(2, args.count | 0)); clampComp(nc); }
@@ -246,6 +238,9 @@ function loadEngine(appSrc) {
           var xc = null; for (var xi = 0; xi < S.comps.length; xi++) if (S.comps[xi].id === args.id) xc = S.comps[xi];
           if (xc) {
             __deepMerge(xc, args.patch || {});
+            // Ticking "Dual panel" is a request for separate boxes: the divider runs the full interior height
+            // so it actually splits the carcass (each box then gets its own top, bottom and back).
+            if (typeof seatDualFullHeight === 'function') seatDualFullHeight(xc);
             if (typeof clampComp === 'function') clampComp(xc);
             if (xc.type === 'drawer' && typeof syncDrawerFlanks === 'function') syncDrawerFlanks(xc);
           }
@@ -284,7 +279,9 @@ function loadEngine(appSrc) {
         return { partNo: i + 1, module: job ? (p.mname || '—') : activeName,
                  name: p.name, qty: p.qty, w: p.w, h: p.h, d: p.d, thick: p.thick,
                  length: p.length, width: p.width, key: p.key, srcId: (p.srcId != null ? p.srcId : null),
-                 band: p.band || '—', tapeLen: p.tapeLen || 0 };
+                 band: p.band || '—', tapeLen: p.tapeLen || 0,
+                 // Panel colour / decor code — the board this part is cut from. '' when none is set.
+                 colour: p.colour || '' };
       });
       var instances = job ? jobCutListInstances() : cutListInstances();
       var pack = job ? jobNest() : nest(instances);
@@ -301,7 +298,8 @@ function loadEngine(appSrc) {
         cutList: rows,
         totals: { parts: parts, areaM2: area / 1e6, tapeM: tape / 1000 },
         sheets: { SW: pack.SW, SH: pack.SH, utilisation: pack.utilisation,
-                  sheets: pack.sheets.map(function (s) { return { placements: s.placements }; }) },
+                  // Each sheet is ONE physical board, so it carries the colour/decor its parts are cut from.
+                  sheets: pack.sheets.map(function (s) { return { placements: s.placements, colour: s.colour || '' }; }) },
         bom: bom
       };
       if (opts.render) {
