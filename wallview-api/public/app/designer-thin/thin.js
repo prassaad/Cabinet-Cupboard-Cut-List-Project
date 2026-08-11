@@ -88,7 +88,11 @@
   const curUnit = () => (design && design.modules && design.modules[active] && design.modules[active].unit) || 'mm';
   const toDisp = (mm) => curUnit() === 'in' ? mm / MM_PER_IN : mm;
   const toMM = (v) => curUnit() === 'in' ? v * MM_PER_IN : v;
-  const fmtU = (mm) => curUnit() === 'in' ? (mm / MM_PER_IN).toFixed(3) : String(Math.round(mm));
+  // Millimetres go through fmt(): up to 2 decimals, trailing zeros trimmed. Whole sizes still print whole
+  // ("2400"), but a real 577.5 mm opening prints as 577.5 rather than being rounded to 578 — rounding each
+  // cell was what made four of them appear to sum to 2402 in a 2400 mm cabinet, and it also hid the edge-tape
+  // deduction (a 2098.4 mm cut shown as 2098). The cut list must never state a size the part does not have.
+  const fmtU = (mm) => curUnit() === 'in' ? (mm / MM_PER_IN).toFixed(3) : fmt(mm);
   let showDims = true, measureOn = false, measurePts = [], lastClickMM = null, explode = 0;
   let cellMode = false, cellSel = [];   // multi-bay door pick
   const cellSig = (c) => `${Math.round(c.left)},${Math.round(c.right)},${Math.round(c.bottom)},${Math.round(c.top)}`;
@@ -319,11 +323,12 @@
       const cxi = i % cols, cyi = Math.floor(i / cols);
       const ox = cxi * cellW + (cellW - SW * s) / 2, oy = cyi * cellH + (cellH - SH * s) / 2;
       sctx.strokeStyle = '#39424f'; sctx.lineWidth = 1; sctx.strokeRect(ox + 0.5, oy + 0.5, SW * s - 1, SH * s - 1);
-      // A sheet is one physical board, so name the colour it must be cut from when the job uses more than one.
-      if (sheet.colour) {
-        sctx.fillStyle = '#9aa3b2'; sctx.font = '11px system-ui, sans-serif'; sctx.textAlign = 'left'; sctx.textBaseline = 'bottom';
-        sctx.fillText(`#${i + 1} · ${sheet.colour}`, ox, oy - 2);
-      }
+      // A sheet is ONE physical board. Caption it with the board size and — when the job uses colour codes —
+      // the decor plus its number within that decor ("Oak H1180 · board 2 of 3"), which is what you order by.
+      sctx.textAlign = 'left'; sctx.textBaseline = 'bottom';
+      sctx.font = '600 11px system-ui, sans-serif'; sctx.fillStyle = sheet.colour ? '#e8c07a' : '#9aa3b2';
+      const cap = `#${i + 1} · ${fmtU(SW)}×${fmtU(SH)}` + (sheet.colour ? ` · ${sheet.colour} (board ${sheet.colourNo} of ${sheet.colourTotal})` : '');
+      sctx.fillText(cap, ox, oy - 3);
       for (const p of sheet.placements) {
         const hi = p.srcId != null && String(p.srcId) === String(selectedId);
         drawPlacement(sctx, p, ox, oy, s, true, { sheetNo: i + 1, highlight: hi });
@@ -331,7 +336,38 @@
       }
     });
     const st = $('#sheet-stats'); st.classList.remove('hidden');
-    st.innerHTML = `Sheets: <b>${n}</b> · Utilisation: <b>${((Math.min(1, sh.utilisation || 0)) * 100).toFixed(1)}%</b> <span style="color:var(--muted)">(${scope === 'job' ? 'whole job' : 'this module'})</span> · Sheet ${fmtU(SW)}×${fmtU(SH)} ${curUnit()}`;
+    st.innerHTML = `Sheets: <b>${n}</b> · Utilisation: <b>${((Math.min(1, sh.utilisation || 0)) * 100).toFixed(1)}%</b> <span style="color:var(--muted)">(${scope === 'job' ? 'whole job' : 'this module'})</span> · Sheet ${fmtU(SW)}×${fmtU(SH)} ${curUnit()}`
+      + orderListHTML(sh);
+  }
+  // ── Boards to order, per colour ──
+  // The whole point of the colour code: each decor is a separate product bought by the sheet, so this is the
+  // purchase list — how many boards of each code the job needs. Hidden when the job uses a single board, where
+  // the plain "Sheets: N" above already says it.
+  function colourOrder(sh) {
+    // Colours whose every part is oversize contribute no board — they'd read as "order 0 sheets". Drop them
+    // here; the oversize warning names them (with their code) so nothing goes unnoticed.
+    const by = ((sh && sh.byColour) || []).filter((g) => g.sheets > 0);
+    return by.length > 1 || (by.length === 1 && by[0].colour) ? by.slice().sort((a, b) => b.sheets - a.sheets) : [];
+  }
+  function orderListHTML(sh) {
+    const by = colourOrder(sh);
+    let out = '';
+    if (by.length) {
+      const rows = by.map((g) => `<tr><td>${esc(g.colour || '(no code)')}</td><td><b>${g.sheets}</b></td><td>${g.parts}</td><td>${((Math.min(1, g.utilisation || 0)) * 100).toFixed(0)}%</td></tr>`).join('');
+      const total = by.reduce((a, g) => a + g.sheets, 0);
+      out += `<table class="order-tbl"><thead><tr><th>Boards to order</th><th>Sheets</th><th>Parts</th><th>Used</th></tr></thead>
+        <tbody>${rows}</tbody><tfoot><tr><td>Total</td><td><b>${total}</b></td><td></td><td></td></tr></tfoot></table>`;
+    }
+    out += oversizeHTML(sh);
+    return out;
+  }
+  // Parts bigger than the stock sheet sit on no board at all, so they are missing from the layout AND from the
+  // order quantity. Say so loudly — a silent omission would under-order the job.
+  function oversizeHTML(sh) {
+    const ov = (sh && sh.oversize) || []; if (!ov.length) return '';
+    const list = ov.map((o) => `${esc(o.name)} ${fmtU(o.length)}×${fmtU(o.width)}${o.colour ? ' · ' + esc(o.colour) : ''}`).join('<br>');
+    return `<div class="oversize-warn"><b>⚠ ${ov.length} part${ov.length > 1 ? 's do' : ' does'} not fit the ${fmtU(sh.SW)}×${fmtU(sh.SH)} sheet</b>
+      — not shown in the layout and not counted in the boards above. Use a larger sheet or split the part.<br>${list}</div>`;
   }
   // Faithful port of the prototype's drawPlacement (presentation only).
   function drawPlacement(ctx, p, ox, oy, scale, showText, opts) {
@@ -422,7 +458,8 @@
       `Parts: <b>${t.parts || 0}</b><br>Board area: <b>${fmt(t.areaM2 || 0)} m²</b><br>` +
       `Edge tape: <b>${fmt(t.tapeM || 0)} m</b><br>` +
       `Sheets: <b>${(sh.sheets || []).length}</b> · Utilisation: <b>${((Math.min(1, sh.utilisation || 0)) * 100).toFixed(1)}%</b> <span style="color:var(--muted)">(${scope === 'job' ? 'whole job' : 'this module'})</span>` +
-      (model.bom ? `<br>BOM: <b>${esc(model.bom.currency)} ${fmt(model.bom.total)}</b>` : '');
+      (model.bom ? `<br>BOM: <b>${esc(model.bom.currency)} ${fmt(model.bom.total)}</b>` : '') +
+      orderListHTML(sh);   // boards to order per colour code — repeated here so it sits next to the cut list
   }
 
   // ── Extra pieces (manual cut-list rows not in the box geometry: dummy panels, exposed fillers…) ──
@@ -666,13 +703,30 @@
       <button onclick="window.print()">Print / Save as PDF</button></body></html>`);
     win.document.close(); setTimeout(() => win.print(), 400);
   }
+  // Sheet caption for the exports — board size plus, when colour codes are in use, the decor and its number
+  // within that decor. The printed layout has to say which board each sheet is cut from.
+  const sheetCaption = (s, i, SW, SH, u) =>
+    `Sheet ${i + 1} — ${fmtU(SW)}×${fmtU(SH)} ${u}` + (s.colour ? ` · ${esc(s.colour)} (board ${s.colourNo} of ${s.colourTotal})` : '');
+  // "Boards to order" table for the printed pack — same purchase list as on screen.
+  function orderTableHTML(sh) {
+    const by = colourOrder(sh);
+    const rows = by.map((g) => `<tr><td>${esc(g.colour || '(no code)')}</td><td>${g.sheets}</td><td>${g.parts}</td><td>${((Math.min(1, g.utilisation || 0)) * 100).toFixed(0)}%</td></tr>`).join('');
+    const total = by.reduce((a, g) => a + g.sheets, 0);
+    const ov = (sh.oversize || []).length
+      ? `<p><b>⚠ ${sh.oversize.length} part(s) do not fit the ${fmtU(sh.SW)}×${fmtU(sh.SH)} sheet</b> — not in the layout and not counted above: `
+        + sh.oversize.map((o) => `${esc(o.name)} ${fmtU(o.length)}×${fmtU(o.width)}${o.colour ? ' (' + esc(o.colour) + ')' : ''}`).join('; ') + '</p>'
+      : '';
+    if (!by.length) return ov;   // single board: the sheet count above already says it — but still warn on oversize
+    return `<h2>Boards to order</h2><table><thead><tr><th>Colour code</th><th>Sheets</th><th>Parts</th><th>Used</th></tr></thead>
+      <tbody>${rows}</tbody><tfoot><tr><td><b>Total</b></td><td><b>${total}</b></td><td></td><td></td></tr></tfoot></table>${ov}`;
+  }
   function exportPDF() {
     if (!model) return; const sh = model.sheets || { sheets: [] }, SW = sh.SW, SH = sh.SH, u = curUnit();
-    const imgs = (sh.sheets || []).map((s, i) => `<figure><img src="${sheetImage(s, i, SW, SH)}"><figcaption>Sheet ${i + 1} — ${fmtU(SW)}×${fmtU(SH)} ${u}</figcaption></figure>`).join('');
+    const imgs = (sh.sheets || []).map((s, i) => `<figure><img src="${sheetImage(s, i, SW, SH)}"><figcaption>${sheetCaption(s, i, SW, SH, u)}</figcaption></figure>`).join('');
     const t = model.totals || {};
     printDoc('Cut list', `<h1>WallView — Cut List</h1>
       <p>Parts: <b>${t.parts || 0}</b> · Board: <b>${fmt(t.areaM2 || 0)} m²</b> · Tape: <b>${fmt(t.tapeM || 0)} m</b> · Sheets: <b>${(sh.sheets || []).length}</b> @ <b>${((Math.min(1, sh.utilisation || 0)) * 100).toFixed(1)}%</b> (${scope === 'job' ? 'whole job' : 'this module'})</p>
-      ${cutTableHTML()}<h2>Sheet layout</h2><div class="imgs">${imgs}</div>`);
+      ${cutTableHTML()}${orderTableHTML(sh)}<h2>Sheet layout</h2><div class="imgs">${imgs}</div>`);
   }
   // One module's drawing block (elevation + 3D) for the production pack.
   function modBlock(name, m2, m3) {
@@ -682,7 +736,7 @@
   }
   async function exportProdPack() {
     if (!model) return; const sh = model.sheets || { sheets: [] }, SW = sh.SW, SH = sh.SH, u = curUnit();
-    const sheets = (sh.sheets || []).map((s, i) => `<figure><img src="${sheetImage(s, i, SW, SH)}"><figcaption>Sheet ${i + 1}</figcaption></figure>`).join('');
+    const sheets = (sh.sheets || []).map((s, i) => `<figure><img src="${sheetImage(s, i, SW, SH)}"><figcaption>${sheetCaption(s, i, SW, SH, u)}</figcaption></figure>`).join('');
     let blocks;
     if (scope === 'job' && design && design.modules && design.modules.length > 1) {
       // Per-module drawings across the whole job.
@@ -698,6 +752,7 @@
     }
     printDoc('Production pack', `<h1>WallView — Production Pack</h1>${blocks}
       <h2>Cut list${scope === 'job' ? ' (whole job)' : ''}</h2>${cutTableHTML()}
+      ${orderTableHTML(sh)}
       <h2>Sheet layout</h2><div class="imgs">${sheets}</div>`);
   }
 
@@ -707,7 +762,9 @@
     const cab = m.cab || {}, bp = m.backPanel || {}, sheet = m.sheet || {}, top = cab.top || {}, bot = cab.bottom || {};
     const set = (id, v) => {
       const el = $('#' + id); if (!el || el.type === 'checkbox') return;
-      el.value = (v == null) ? '' : (el.type === 'number' ? (curUnit() === 'in' ? +(v / MM_PER_IN).toFixed(3) : Math.round(v)) : v);
+      // Number fields show the stored value, not a rounded one — otherwise merely touching a field could
+      // silently snap a 577.5 mm size to 578 on the way back to the engine.
+      el.value = (v == null) ? '' : (el.type === 'number' ? (curUnit() === 'in' ? +(v / MM_PER_IN).toFixed(3) : Math.round(v * 100) / 100) : v);
     };
     const chk = (id, v) => { const el = $('#' + id); if (el) el.checked = !!v; };
     set('in-h', cab.h); set('in-w', cab.w); set('in-d', cab.d); set('in-t', cab.t);
@@ -970,7 +1027,8 @@
 
   // Selection editor rows (data-path drives a targeted patch_comp on change).
   const selRow = (path, label, val, nounit) => {
-    const disp = val == null ? '' : (nounit ? val : (curUnit() === 'in' ? +(val / MM_PER_IN).toFixed(3) : Math.round(val)));
+    // Shows the stored value (2 dp max), never a rounded one — see fmtU.
+    const disp = val == null ? '' : (nounit ? val : (curUnit() === 'in' ? +(val / MM_PER_IN).toFixed(3) : Math.round(val * 100) / 100));
     return `<label class="sel-row"><span>${label}</span><input type="number" step="any" data-path="${path}"${nounit ? ' data-nounit' : ''} value="${disp}" placeholder="${val == null ? 'auto' : ''}"></label>`;
   };
   const optRow = (path, label, opts, cur) => `<label class="sel-row"><span>${label}</span><select data-path="${path}">${opts.map(([v, l]) => `<option value="${v}"${String(cur) === String(v) ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
@@ -978,7 +1036,7 @@
   const subHead = (t) => `<div class="sel-sub">${t}</div>`;
   const pathToObj = (path, val) => { const p = path.split('.'); const root = {}; let o = root; for (let i = 0; i < p.length - 1; i++) { o[p[i]] = {}; o = o[p[i]]; } o[p[p.length - 1]] = val; return root; };
   // Module-level (config) rows — data-mpath patches the active module, not a component.
-  const mNumRow = (path, label, val) => { const disp = val == null ? '' : (curUnit() === 'in' ? +(val / MM_PER_IN).toFixed(3) : Math.round(val)); return `<label class="sel-row"><span>${label}</span><input type="number" step="any" data-mpath="${path}" value="${disp}" placeholder="${val == null ? 'full' : ''}"></label>`; };
+  const mNumRow = (path, label, val) => { const disp = val == null ? '' : (curUnit() === 'in' ? +(val / MM_PER_IN).toFixed(3) : Math.round(val * 100) / 100); return `<label class="sel-row"><span>${label}</span><input type="number" step="any" data-mpath="${path}" value="${disp}" placeholder="${val == null ? 'full' : ''}"></label>`; };
   const mOptRow = (path, label, opts, cur) => `<label class="sel-row"><span>${label}</span><select data-mpath="${path}">${opts.map(([v, l]) => `<option value="${v}"${String(cur) === String(v) ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`;
   // "Part name": custom cut-list label. Components store it on themselves (data-path=customName → patch_comp);
   // carcass faces store it in the module (data-mpath=partNames.<id> → patch). Empty ⇒ the engine's default name.
@@ -1048,7 +1106,7 @@
     if (c.type === 'shelf' || c.type === 'vertical') {
       const isShelf = c.type === 'shelf';
       html = nameRowComp(c.customName) + colRowC
-        + selRow('pos', isShelf ? 'Height (mm)' : 'Position (mm)', Math.round(c.pos || 0))
+        + selRow('pos', isShelf ? 'Height (mm)' : 'Position (mm)', c.pos || 0)
         + selRow('thick', 'Thickness (mm)', c.thick)
         + selRow('depth', 'Depth (mm)', c.depth)
         + selRow('setback', 'Setback from back (mm)', c.setback || 0)

@@ -298,8 +298,18 @@ function loadEngine(appSrc) {
         cutList: rows,
         totals: { parts: parts, areaM2: area / 1e6, tapeM: tape / 1000 },
         sheets: { SW: pack.SW, SH: pack.SH, utilisation: pack.utilisation,
-                  // Each sheet is ONE physical board, so it carries the colour/decor its parts are cut from.
-                  sheets: pack.sheets.map(function (s) { return { placements: s.placements, colour: s.colour || '' }; }) },
+                  // How many boards of each colour to buy — the purchasing answer, per decor.
+                  byColour: pack.byColour || [],
+                  // Parts too big for the stock sheet: they are on no board, so the shop must be told rather
+                  // than have them silently absent from the layout (and absent from the order quantity).
+                  oversize: (pack.oversize || []).map(function (o) {
+                    return { name: o.name, length: o.len, width: o.wid, colour: o.colour || '', srcId: o.srcId != null ? o.srcId : null };
+                  }),
+                  // Each sheet is ONE physical board, so it carries the colour/decor its parts are cut from
+                  // plus its number WITHIN that colour ("Oak 2 of 3").
+                  sheets: pack.sheets.map(function (s) {
+                    return { placements: s.placements, colour: s.colour || '', colourNo: s.colourNo || 1, colourTotal: s.colourTotal || 1 };
+                  }) },
         bom: bom
       };
       if (opts.render) {

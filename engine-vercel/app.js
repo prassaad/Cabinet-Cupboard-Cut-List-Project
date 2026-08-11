@@ -138,7 +138,11 @@ const btnDelete = $('btn-delete');
 // ---------- Units ----------
 const toDisp = (mm) => S.unit === 'mm' ? mm : mm / MM_PER_IN;
 const toMM = (v) => S.unit === 'mm' ? v : v * MM_PER_IN;
-const fmt = (mm) => S.unit === 'mm' ? Math.round(toDisp(mm)).toString() : toDisp(mm).toFixed(3);
+// Millimetres keep up to 2 decimals, trailing zeros trimmed — a whole number still prints as a whole number
+// ("2400"), but a real 577.5 prints as "577.5" instead of being rounded to 578. Rounding every value to the
+// nearest millimetre used to make four 577.5 mm openings read as 578 and appear to sum to 2402 in a 2400 mm
+// cabinet, and it hid the edge-tape deduction (a 2098.4 cut shown as 2098). Never display a size a part isn't.
+const fmt = (mm) => S.unit === 'mm' ? String(Math.round(toDisp(mm) * 100) / 100) : toDisp(mm).toFixed(3);
 const fmtU = (mm) => `${fmt(mm)} ${S.unit}`;
 const unitStep = () => S.unit === 'mm' ? 1 : 0.125;
 
@@ -901,16 +905,23 @@ function renderCutList() {
 function nest(items) {
   const groups = new Map();
   for (const it of items) { const c = it.colour || ''; if (!groups.has(c)) groups.set(c, []); groups.get(c).push(it); }
-  if (groups.size <= 1) return nestOne(items, items.length ? (items[0].colour || '') : '');
-  const sheets = [];
-  let partArea = 0;
-  let SW = S.sheet.w, SH = S.sheet.h;
+  if (!groups.size) groups.set('', []);
+  const sheets = [], byColour = [], oversize = [];
+  let partArea = 0, SW = S.sheet.w, SH = S.sheet.h;
   for (const [colour, group] of groups) {
     const pack = nestOne(group, colour);
+    // Number each sheet WITHIN its colour ("Oak — 2 of 3") as well as globally: that per-colour count is the
+    // purchasing answer — how many boards of this decor to order.
+    pack.sheets.forEach((s, i) => { s.colourNo = i + 1; s.colourTotal = pack.sheets.length; });
+    const area = pack.sheets.length * pack.SW * pack.SH;
+    byColour.push({ colour, sheets: pack.sheets.length, parts: group.length - pack.oversize.length,
+                    oversize: pack.oversize.length, areaM2: pack.partArea / 1e6,
+                    utilisation: area ? pack.partArea / area : 0 });
     sheets.push(...pack.sheets); partArea += pack.partArea; SW = pack.SW; SH = pack.SH;
+    for (const o of pack.oversize) oversize.push({ ...o, colour });
   }
   const sheetArea = sheets.length * SW * SH;
-  return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH, partArea };
+  return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH, partArea, byColour, oversize };
 }
 function nestOne(items, colour) {
   const { w: SW, h: SH, kerf } = S.sheet, lock = S.grainLock;
@@ -931,14 +942,23 @@ function nestOne(items, colour) {
     p = tryFootprint(sheet, r.wid, r.len); if (p) return tag(p, r, true);
     return null;
   };
+  // Parts that do not fit the stock sheet in either orientation are collected as `oversize` — NOT given a
+  // board of their own. Opening a sheet for a piece that cannot go on it produced an empty board that still
+  // counted towards the sheet total (so the order quantity was one too many, for a board nothing is cut from)
+  // and pushed utilisation past 100% because its area was billed against a sheet it never occupied.
+  const oversize = [];
+  let partArea = 0;
   for (const r of rects) {
     let placed = null;
     for (const sheet of sheets) { placed = tryPlace(sheet, r); if (placed) { sheet.placements.push(placed); break; } }
-    if (!placed) { const sheet = newSheet(); const p = tryPlace(sheet, r); if (p) sheet.placements.push(p); }
+    if (!placed) {
+      const sheet = newSheet(); const p = tryPlace(sheet, r);
+      if (p) { sheet.placements.push(p); placed = p; } else { sheets.pop(); oversize.push({ name: r.name, len: r.len, wid: r.wid, gkey: r.gkey, srcId: r.srcId }); }
+    }
+    if (placed) partArea += r.len * r.wid;   // only placed parts consume sheet area
   }
-  const partArea = rects.reduce((a, r) => a + r.len * r.wid, 0);
   const sheetArea = sheets.length * SW * SH;
-  return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH, partArea };
+  return { sheets, utilisation: sheetArea ? partArea / sheetArea : 0, SW, SH, partArea, oversize };
 }
 
 // ---------- Scale bar (adaptive ruler) ----------
@@ -3146,8 +3166,15 @@ function aiEstimateBOM(opts = {}) {
   const hingeFor = (dh) => dh <= 900 ? 2 : dh <= 1500 ? 3 : dh <= 2000 ? 4 : 5;
   const hingesTotal = leaves.reduce((a, r) => a + hingeFor(r.y1 - r.y0), 0);
   const hingesPerDoor = doorCount ? Math.round(hingesTotal / doorCount) : 0;
+  // Boards are ordered PER COLOUR — a decor is a different product with its own price, so the sheet cost is
+  // one line per colour rather than a single lump. `prices.sheetByColour` can carry a per-code price; anything
+  // not listed falls back to `prices.sheet`. With one colour (or none set) this is the single line it always was.
+  const sheetLines = (pack.byColour || [{ colour: '', sheets }]).filter(g => g.sheets > 0).map(g => ({
+    item: `Sheet ${fmt(S.sheet.w)}×${fmt(S.sheet.h)} ${S.unit}` + (g.colour ? ` · ${g.colour}` : ''),
+    qty: g.sheets, unit: 'sheet', unitCost: (p.sheetByColour && p.sheetByColour[g.colour]) || p.sheet,
+  }));
   const lines = [
-    { item: `Sheet ${fmt(S.sheet.w)}×${fmt(S.sheet.h)} ${S.unit}`, qty: sheets, unit: 'sheet', unitCost: p.sheet },
+    ...sheetLines,
     { item: 'Edge banding tape', qty: +tapeM.toFixed(2), unit: 'm', unitCost: p.tapePerM },
     { item: `Hinges (~${hingesPerDoor}/door)`, qty: hingesTotal, unit: 'ea', unitCost: p.hinge },
     { item: 'Handles', qty: doorCount, unit: 'ea', unitCost: p.handle },
@@ -3157,7 +3184,9 @@ function aiEstimateBOM(opts = {}) {
   return {
     currency: opts.currency || 'GBP', lines,
     total: +lines.reduce((a, l) => a + l.lineCost, 0).toFixed(2),
-    assumptions: { sheets, hingesPerDoor, shelfPinsPerShelf: 4, edgeTapeM: +tapeM.toFixed(2) },
+    // sheetsByColour is the shopping list: how many boards of each decor to buy.
+    assumptions: { sheets, sheetsByColour: (pack.byColour || []).map(g => ({ colour: g.colour, sheets: g.sheets })),
+                   hingesPerDoor, shelfPinsPerShelf: 4, edgeTapeM: +tapeM.toFixed(2) },
   };
 }
 window.Cabinet = {

@@ -220,6 +220,17 @@ body.no-modules .setup-empty { display: block; }
 .band-grid .bc { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; cursor: pointer; white-space: nowrap; }
 .band-grid input { margin: 0; }
 
+/* Parts too big for the stock sheet: on no board, so missing from both the layout and the order quantity. */
+.oversize-warn { margin-top: 8px; padding: 7px 9px; border: 1px solid var(--danger, #e5484d); border-radius: 6px;
+  background: rgba(229, 72, 77, .10); color: var(--ink); font-size: 12px; line-height: 1.5; }
+
+/* Boards to order, per colour code — the purchase list under the sheet layout and in the cut-list summary. */
+.order-tbl { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12px; }
+.order-tbl th, .order-tbl td { border-top: 1px solid var(--line); padding: 3px 6px; text-align: right; }
+.order-tbl th:first-child, .order-tbl td:first-child { text-align: left; }
+.order-tbl thead th { color: var(--muted); font-weight: 600; border-top: 0; }
+.order-tbl tfoot td { color: var(--muted); }
+
 /* Per-part-type panel colour / decor codes. Label left, free-text code right; blank inherits the code above. */
 .colour-grid { display: grid; grid-template-columns: 1fr 1.3fr; gap: 5px 8px; align-items: center; font-size: 12px; margin-top: 10px; }
 .colour-grid .rl { color: var(--ink); }
