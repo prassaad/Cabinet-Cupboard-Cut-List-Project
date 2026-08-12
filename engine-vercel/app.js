@@ -373,10 +373,23 @@ const doorMount = (c) => (c.mount === 'inset' ? 'inset' : 'outset');
 // Per-door edge-banding thickness (mm), applied on ALL FOUR sides of the door. 0 / unset = no banding.
 // Selectable per door (0.8 / 1.0 / 1.3 / 2.0). Stored on the door as c.bandThick; parsed so a "2" string is fine.
 const doorBandThick = (c) => Math.max(0, parseFloat(c && c.bandThick) || 0);
-// Every new door starts with a 1 mm gap on all four sides (a small reveal). Stored per-door (gapL/R/T/B) so the
-// value persists with the component and shows in the door editor's Gap field; the user can still change it per side.
-const DOOR_GAP = 1;   // mm
-const newDoorGaps = () => ({ gapL: DOOR_GAP, gapR: DOOR_GAP, gapT: DOOR_GAP, gapB: DOOR_GAP });
+// ---------- Overlay (outset) front sizing ----------
+// An overlay front — a door or a drawer fascia — covers the carcass, so each of its four edges is one of two things:
+//   EXTERIOR: it meets the cabinet's outer face. Run right out to it and deduct NOTHING, so a single full-height
+//             door equals the cabinet's outer face exactly (w × h) and a wardrobe front loses nothing top or bottom.
+//   INTERIOR: it meets a shelf/divider shared with the neighbouring front. Run to the divider CENTRELINE — the two
+//             fronts together then cover the whole shelf — and give back HALF the reveal each, leaving exactly
+//             `reveal` mm (2 mm by default) of clearance in the joint between them.
+// So clearance is spent only where two fronts meet, never against the outside of the cabinet.
+const frontClear = () => Math.max(0, (S.doors && S.doors.reveal != null) ? +S.doors.reveal : 2) / 2;
+// Where one edge of an overlay front lands. `edge` is the opening's edge, `face` the carcass face beyond it,
+// `dir` +1 when the front grows towards that face (right/top) and -1 for left/bottom.
+const overlayEdge = (edge, face, dir, t) =>
+  (dir > 0 ? edge >= face - t - 0.5 : edge <= face + t + 0.5) ? face : edge + dir * (t / 2 - frontClear());
+// New doors carry NO manual gap: overlay clearance now comes from the reveal and is applied only in the joints
+// (see overlayEdge), and an inset door already deducts the reveal on all four sides. gapL/R/T/B remain available
+// per door for a deliberate extra gap on one side.
+const newDoorGaps = () => ({});
 // The opening a door fills: an explicit multi-cell `span` (built by picking cells) if present,
 // otherwise the cell at its anchor expanded per its Covers mode. Shape: {left,right,bottom,top}.
 const doorBase = (c) => c.span ? c.span : cellAt(c.ax, c.ay, null, doorCoverOpts(c));
@@ -403,15 +416,14 @@ function doorRectsFor(c) {
     x0 = cell.left + g / 2; x1 = cell.right - g / 2;
     y0 = cell.bottom + g / 2; y1 = cell.top - g / 2;
   } else {
-    // Overlay: NO deductions. Reach the carcass outer face on exterior sides, and the divider
-    // centerline on interior sides (so the door overlays half the divider). An open edge from partial
-    // sizing (freeTop/freeBottom) instead gets a reveal gap, so a stacked drawer + door sit flush.
-    // eps tolerates float drift.
-    const eps = 0.5;   // a cell edge at (or beyond) the carcass line reaches the outer face; an interior divider overlays half
-    x0 = (cell.left   <= t + eps)     ? 0 : cell.left   - t / 2;
-    x1 = (cell.right  >= w - t - eps) ? w : cell.right  + t / 2;
-    y0 = cell.freeBottom ? cell.bottom + g / 2 : ((cell.bottom <= t + eps)     ? 0 : cell.bottom - t / 2);
-    y1 = cell.freeTop    ? cell.top    - g / 2 : ((cell.top    >= h - t - eps) ? h : cell.top    + t / 2);
+    // Overlay: flush with the carcass on every exterior side (no deduction at all), and half-way across the
+    // divider — less half the reveal — on interior sides, so a pair of doors covers the whole shelf with one
+    // `reveal` joint between them. An open edge from partial sizing (freeTop/freeBottom) gets the same half
+    // reveal, so a stacked drawer + door sit flush. See overlayEdge.
+    x0 = overlayEdge(cell.left,  0, -1, t);
+    x1 = overlayEdge(cell.right, w, +1, t);
+    y0 = cell.freeBottom ? cell.bottom + g / 2 : overlayEdge(cell.bottom, 0, -1, t);
+    y1 = cell.freeTop    ? cell.top    - g / 2 : overlayEdge(cell.top,    h, +1, t);
   }
   // Per-side gap overrides for THIS door (mm): pull each named side in by its own gap (e.g. 1 mm on the left).
   x0 += Math.max(0, c.gapL || 0); x1 -= Math.max(0, c.gapR || 0);
@@ -425,7 +437,7 @@ function doorRects() { const out = []; for (const c of S.comps) if (c.type === '
 
 // ---------- Drawers ----------
 // A drawer component fills the cell at its anchor (bounded by surrounding shelves/verticals) with `count` stacked fronts.
-const DRAWER = { gap: 3, sideClear: 13, boxHeightRatio: 0.5, runnerClearRatio: 0.25, fasciaClear: 2 };   // mm + ratios: reveal around fronts, channel/runner gap per side (flank-inner to box side); box (sides + back) height = 50% of the drawer height, seated in the middle of the fascia with 25% runner clearance beneath (remaining 25% above); fasciaClear = 2 mm reveal trimmed off EVERY side of EVERY fascia (inset & outset) so drawers get their running gap and never rub
+const DRAWER = { gap: 3, sideClear: 13, boxHeightRatio: 0.5, runnerClearRatio: 0.25, fasciaClear: 2 };   // mm + ratios: reveal around fronts, channel/runner gap per side (flank-inner to box side); box (sides + back) height = 50% of the drawer height, seated in the middle of the fascia with 25% runner clearance beneath (remaining 25% above); fasciaClear = 2 mm trimmed off every side of an INSET fascia (it sits inside the opening). An OUTSET fascia is sized like an overlay door instead — flush to the carcass, carried half-way over the shelf/top it meets, and a `reveal` joint between stacked fascias (see frontClear/overlayEdge)
 // NOTE on roles: `backPanel` holds the grooved-panel settings shown in the "Bottom Panel" card and BUILDS THE BOTTOM
 // (its setback = groove height from the box floor). `caps.bottom` holds the settings shown in the "Back Panel" card and
 // BUILDS THE REAR WALL (its setback = recess from the rear, default 15). The object keys are kept for save compatibility.
@@ -600,13 +612,19 @@ function drawerFronts(c) {
 //  - inset  → exactly that cell (between the flanks / opening).
 //  - outset → overlays the adjacent member like an overlay door: reach the cabinet outer face where it meets an
 //             exterior side, otherwise lap half the bounding member (a flank when present, else an interior divider).
+// The face an overlay bank's fascias cover: like a door, it runs flush to the carcass on an exterior side and
+// half-way across the shelf/divider (less half the reveal) on an interior one — vertically as well as
+// horizontally, so the top fascia carries over the panel above it instead of stopping at the opening.
 function drawerFasciaCell(c) {
   const cell = cellAt(c.ax, c.ay, null);
   if (c.mount === 'inset') return cell;
-  const t = drawerMaterialThick(c), w = S.cab.w, eps = 0.5;
-  const left  = cell.left  <= t + eps     ? 0 : cell.left  - t / 2;
-  const right = cell.right >= w - t - eps ? w : cell.right + t / 2;
-  return { left, right, bottom: cell.bottom, top: cell.top };
+  const t = drawerMaterialThick(c), { w, h } = S.cab;
+  return {
+    left:   overlayEdge(cell.left,   0, -1, t),
+    right:  overlayEdge(cell.right,  w, +1, t),
+    bottom: overlayEdge(cell.bottom, 0, -1, t),
+    top:    overlayEdge(cell.top,    h, +1, t),
+  };
 }
 // The decorative fascia panels — the actual VISIBLE face shown in 2D/3D, one rect per stacked drawer. Horizontal
 // extent comes from drawerFasciaCell (sits between the flanks when side panels are on, widens when removed; outset
@@ -614,12 +632,24 @@ function drawerFasciaCell(c) {
 function drawerFascias(c) {
   const rect = drawerRect(c), fc = drawerFasciaCell(c), n = Math.max(1, c.count | 0);
   const band = (rect.top - rect.bottom) / n;
-  const cl = DRAWER.fasciaClear;   // trim 2 mm off every side (L/R/T/B) of every fascia so each drawer clears its neighbours & the opening
+  const outset = c.mount !== 'inset', hc = frontClear();   // half the reveal → `reveal` mm in every joint
+  // An INSET fascia sits inside the opening, so it is trimmed on all four sides. An OUTSET one already carries
+  // its clearance in fc (flush at the carcass, half a reveal back off a shelf) — only the joints BETWEEN the
+  // stacked bands, and any edge where the bank stops short of its opening, still need trimming.
+  const cl = outset ? 0 : DRAWER.fasciaClear;
+  const cellR = cellAt(c.ax, c.ay, null);
+  const atBottom = outset && rect.bottom - cellR.bottom < 0.5;   // bank sits on the opening floor → fascia runs on over it
+  const atTop = outset && cellR.top - rect.top < 0.5;
   const out = [];
   for (let i = 0; i < n; i++) {
-    const mid = rect.bottom + (i + 0.5) * band, hh = band / 2;
-    let x0 = fc.left + cl, x1 = fc.right - cl;   if (x1 - x0 < 1) { const m = (fc.left + fc.right) / 2; x0 = m - 0.5; x1 = m + 0.5; }
-    let y0 = mid - hh + cl, y1 = mid + hh - cl;  if (y1 - y0 < 1) { y0 = mid - 0.5; y1 = mid + 0.5; }
+    const b0 = rect.bottom + i * band, b1 = b0 + band;
+    let x0 = fc.left + cl, x1 = fc.right - cl;
+    if (x1 - x0 < 1) { const m = (fc.left + fc.right) / 2; x0 = m - 0.5; x1 = m + 0.5; }
+    // Bottom edge of the lowest band and top edge of the highest reach the fascia face; every other band
+    // edge is a joint with the next fascia, so each side gives back half the reveal.
+    let y0 = (i === 0 && atBottom) ? fc.bottom : b0 + (outset ? hc : cl);
+    let y1 = (i === n - 1 && atTop) ? fc.top : b1 - (outset ? hc : cl);
+    if (y1 - y0 < 1) { const m = (b0 + b1) / 2; y0 = m - 0.5; y1 = m + 0.5; }
     out.push({ x0, x1, y0, y1 });
   }
   return out;
@@ -693,15 +723,17 @@ function drawerParts(c) {
   // Front side + back side group into one "Drawer front / back" row (qty 2) when both are present and identical (the
   // default outset back makes them the same size) — like the cabinet Top/Bottom — otherwise they are listed separately.
   const fbGroup = frontOn && backOn && Math.abs(boxOuterW - backWallW) < 0.5;
+  const fascias = drawerFascias(c);   // the drawn fascia rects — the cut sizes come straight off these
   const parts = [];
   for (let i = 0; i < n; i++) {
     // face maps [length,width] to spatial axes; the third axis carries the board thickness `t`.
     if (frontOn) parts.push({ name: fbGroup ? 'Drawer front / back' : 'Drawer front side', key: 'DrawerBox', length: boxOuterW, width: boxH, face: 'WH', t });
     if (backOn)  parts.push({ name: fbGroup ? 'Drawer front / back' : 'Drawer back side',  key: 'DrawerBox', length: backWallW, width: boxH, face: 'WH', t });
-    // Outer decorative fascia — one per drawer front; height = the drawer band, width follows the opening. Banded like a front.
-    // Trimmed 2 mm on every side (DRAWER.fasciaClear) so the cut piece carries the same running clearance drawn in 2D/3D.
-    const fcl = DRAWER.fasciaClear;
-    parts.push({ name: 'Drawer fascia', key: 'Door', length: Math.max(1, band - 2 * fcl), width: Math.max(1, WcFascia - 2 * fcl), face: 'HW', t });
+    // Outer decorative fascia — one per drawer front. Its size is read straight off the rect that 2D/3D draws
+    // (drawerFascias), so the cut piece can never disagree with the picture: an overlay fascia runs flush to the
+    // carcass, carries over the shelf/top it meets, and keeps a `reveal` joint with the fascia above and below.
+    const fr = fascias[i] || { x0: 0, x1: WcFascia, y0: 0, y1: band };
+    parts.push({ name: 'Drawer fascia', key: 'Door', length: Math.max(1, fr.y1 - fr.y0), width: Math.max(1, fr.x1 - fr.x0), face: 'HW', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: sideDepth, width: boxH, face: 'DH', t });
     parts.push({ name: 'Drawer side', key: 'DrawerBox', length: sideDepth, width: boxH, face: 'DH', t });
     // The grooved BOTTOM (base) — always present; sits in the wall grooves, so it is wider/deeper than the clear inner box.
@@ -2702,6 +2734,15 @@ function hydrateModule(raw) {
   if (!m.edgeTape) m.edgeTape = { thickness: 0.8, width: 25 };                           // older saves predate tape spec
   if (!m.drawerSetup) m.drawerSetup = defaultDrawerSetup();                               // older saves predate the Drawer Setup step
   for (const c of m.comps) if (c.type === 'divider') c.type = 'vertical';   // migrate old terminology
+  // Doors used to be created with a 1 mm gap on ALL FOUR sides. That gap also ate into the exterior edges, so a
+  // full overlay wardrobe door came out 2 mm under the carcass in both directions. Overlay clearance is now taken
+  // from the reveal and spent only where two fronts meet, so the old blanket default is dropped. A gap the user
+  // actually set (any side other than the old 1/1/1/1 default) is left exactly as it is.
+  for (const c of m.comps) {
+    if (c.type === 'door' && c.gapL === 1 && c.gapR === 1 && c.gapT === 1 && c.gapB === 1) {
+      delete c.gapL; delete c.gapR; delete c.gapT; delete c.gapB;
+    }
+  }
   if (m.band && m.band.Divider) { m.band.Vertical = m.band.Divider; delete m.band.Divider; }
   m.band = Object.assign(defaultBand(), m.band || {});
   return m;
