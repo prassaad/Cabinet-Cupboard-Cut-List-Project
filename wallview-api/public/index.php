@@ -26,13 +26,28 @@ use Standscale\Products\WallView\Controller\ProjectController;
     if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') {
         return;
     }
-    $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
-    $path = preg_replace('#^/wallview-api/public#', '', $path);
+    $reqPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+    $path = preg_replace('#^/wallview-api/public#', '', $reqPath);
     $path = preg_replace('#^/public#', '', $path) ?: '/';
+    // The mount prefix that was stripped ('' | '/wallview-api/public'), so redirects below can be
+    // absolute instead of relative — see the landing redirect.
+    $mount = rtrim(substr($reqPath, 0, max(0, strlen($reqPath) - strlen($path))), '/');
 
-    // Friendly landing: send the bare base to the app.
-    if ($path === '/' ) {
-        header('Location: app/');
+    // Collapse a doubled /app/app/… back to /app/… . The landing redirect below used to be the bare
+    // relative `Location: app/`; a browser already sitting inside /app/ resolves that against the
+    // CURRENT directory and lands on /app/app/, which exists nowhere and fell through to the JSON API
+    // as "No route for GET /app/app.". Old links, bookmarks and history entries still point there.
+    // REDIRECT rather than quietly serve the right file: both pages derive their API base from
+    // location.pathname, so a doubled address would have them call /app/api/v1 instead of /api/v1.
+    if (preg_match('#^/app(/app(?:/|$).*)$#', $path, $m)) {
+        header('Location: ' . $mount . $m[1]);
+        exit;
+    }
+
+    // Friendly landing: send the bare base to the app (app/index.html = the sign-in page). Absolute,
+    // built from the URL the browser actually used, so it can never compound the way the old one did.
+    if ($path === '/') {
+        header('Location: ' . $mount . '/app/');
         exit;
     }
     if (strpos($path, '/app') !== 0) {

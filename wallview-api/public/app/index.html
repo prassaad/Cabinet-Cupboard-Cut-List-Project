@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<!--
+  Sign-in page — public/app/index.html.
+
+  This is what the designer redirects to whenever there is no session: thin.js computes
+  LOGIN = <mount>/app/ and sends the browser here on first load, on a failed token refresh, and on
+  logout. It used to be part of the old full designer bundle that was removed when the product
+  consolidated on the thin client, which left /app/ with nothing — Apache fell through to the PHP
+  front controller (a JSON API) and answered "No route for GET /app.".
+
+  Contract (must stay in step with designer-thin/thin.js):
+    POST <mount>/api/v1/login  { email, subdomain, password }
+      -> { accessToken, refreshToken, user: { id, email, name, tenant, roles } }
+    localStorage 'wv_session' = { refreshToken, tenant: user.tenant, user }
+  The access token is deliberately NOT stored: thin.js mints a fresh one from the refresh token on
+  every load, exactly as its own refresh() does.
+
+  Self-contained on purpose (no shared CSS/JS): it has to render even when the rest of the app is
+  mid-deploy, and it is the one page a locked-out user can reach.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WallView — Sign in</title>
+  <style>
+    :root {
+      --bg: #171b22; --card: #1f2530; --line: #2c333f; --ink: #e7ecf3;
+      --muted: #9aa3b2; --accent: #e8c07a; --danger: #e5484d;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+           background: var(--bg); color: var(--ink);
+           font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    .card { width: min(380px, 100%); background: var(--card); border: 1px solid var(--line);
+            border-radius: 10px; padding: 26px 24px; }
+    .brand { letter-spacing: .16em; text-transform: uppercase; font-size: 11px;
+             color: var(--accent); font-weight: 700; }
+    h1 { font-size: 19px; margin: 6px 0 18px; font-weight: 600; }
+    label { display: block; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+    input { width: 100%; margin-top: 4px; padding: 9px 10px; background: #151a22; color: var(--ink);
+            border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+    input:focus { outline: none; border-color: var(--accent); }
+    button { width: 100%; margin-top: 6px; padding: 10px; border: 0; border-radius: 6px;
+             background: var(--accent); color: #2a1d02; font: inherit; font-weight: 700; cursor: pointer; }
+    button[disabled] { opacity: .6; cursor: default; }
+    .err { margin-top: 14px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 6px;
+           background: rgba(229,72,77,.12); font-size: 12.5px; }
+    .err[hidden] { display: none; }
+    .hint { margin: 16px 0 0; font-size: 11.5px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <form class="card" id="f" autocomplete="on">
+    <div class="brand">WallView</div>
+    <h1>Sign in</h1>
+
+    <label>Workspace
+      <input id="subdomain" name="subdomain" required autocapitalize="none" spellcheck="false"
+             placeholder="your-workspace">
+    </label>
+    <label>Email
+      <input id="email" name="email" type="email" required autocomplete="username" placeholder="you@example.com">
+    </label>
+    <label>Password
+      <input id="password" name="password" type="password" required autocomplete="current-password">
+    </label>
+
+    <button id="go" type="submit">Sign in</button>
+    <div class="err" id="err" hidden></div>
+    <p class="hint">Your workspace is the subdomain chosen when the account was created.</p>
+  </form>
+
+  <script>
+    (function () {
+      'use strict';
+      // Same mount derivation as thin.js, so this works whether the document root is public/ or the
+      // app sits in a subfolder (…/wallview-api/public/app/).
+      var MOUNT = location.pathname.replace(/app\/(index\.html)?$/, '');
+      var API = MOUNT.replace(/\/$/, '') + '/api/v1';
+      var APP = MOUNT + 'app/designer-thin/';
+
+      // Already signed in? Go straight through. thin.js will refresh (or bounce back here if stale).
+      try {
+        var s = JSON.parse(localStorage.getItem('wv_session') || 'null');
+        if (s && s.refreshToken) { location.replace(APP); return; }
+      } catch (e) { /* corrupt entry — fall through to the form */ }
+
+      var f = document.getElementById('f'), go = document.getElementById('go'), err = document.getElementById('err');
+      // Remember the workspace between visits — it is the field people forget, not their email.
+      var last = localStorage.getItem('wv_last_workspace');
+      if (last) document.getElementById('subdomain').value = last;
+      (last ? document.getElementById('email') : document.getElementById('subdomain')).focus();
+
+      function fail(msg) { err.textContent = msg; err.hidden = false; go.disabled = false; go.textContent = 'Sign in'; }
+
+      f.addEventListener('submit', function (e) {
+        e.preventDefault();
+        err.hidden = true; go.disabled = true; go.textContent = 'Signing in…';
+        var body = {
+          email: document.getElementById('email').value.trim(),
+          subdomain: document.getElementById('subdomain').value.trim().toLowerCase(),
+          password: document.getElementById('password').value
+        };
+        fetch(API + '/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        }).then(function (res) {
+          return res.text().then(function (txt) {
+            var data = txt ? JSON.parse(txt) : null;
+            if (!res.ok) throw new Error((data && data.error && data.error.message) || ('Sign-in failed (HTTP ' + res.status + ')'));
+            return data;
+          });
+        }).then(function (r) {
+          if (!r || !r.refreshToken || !r.user) throw new Error('Unexpected response from the server.');
+          // Exactly the shape thin.js reads and rewrites in its own refresh().
+          localStorage.setItem('wv_session', JSON.stringify({
+            refreshToken: r.refreshToken, tenant: r.user.tenant, user: r.user
+          }));
+          localStorage.setItem('wv_last_workspace', body.subdomain);
+          location.replace(APP);
+        }).catch(function (e2) { fail(e2.message || 'Sign-in failed.'); });
+      });
+    })();
+  </script>
+</body>
+</html>
