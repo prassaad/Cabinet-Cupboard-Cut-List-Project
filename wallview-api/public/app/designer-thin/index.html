@@ -31,9 +31,14 @@
         </div>
         <div class="btn-row">
           <button id="btn-add-shelf" type="button">+ Shelf</button>
+          <label class="chk" title="Two shelf: the shelf is TWO boards face-to-face, splitting the cabinet into STACKED boxes — one above, one below. Each box gets its own pair of sides, top, bottom and back, and the cut list resizes to match. Leave off for a single shelf inside one box."><input id="in-shelf-dual" type="checkbox" /> Dual</label>
+        </div>
+        <div class="btn-row">
           <button id="btn-add-vertical" type="button">+ Vertical</button>
-          <label class="chk" title="Dual panel: the vertical is TWO boards face-to-face, splitting the cabinet into separate boxes. Each box gets its own top, bottom, back and pair of sides, and the cut list resizes to match. Leave off for a single divider inside one box."><input id="in-vert-dual" type="checkbox" /> Dual</label>
-          <label class="qty" title="How many to add, spaced EVENLY across the interior for equal, symmetric divisions. Leave at 1 to insert a single part into the cell you clicked.">× <input id="in-div-count" type="number" min="1" max="20" step="1" value="1" /></label>
+          <label class="chk" title="Two verticals: the vertical is TWO boards face-to-face, splitting the cabinet into SIDE-BY-SIDE boxes. Each box gets its own top, bottom, back and pair of sides, and the cut list resizes to match. Leave off for a single divider inside one box."><input id="in-vert-dual" type="checkbox" /> Dual</label>
+        </div>
+        <div class="btn-row">
+          <label class="qty" title="How many to add, spaced EVENLY for equal, symmetric boxes. Leave at 1 to insert a single part into the cell you clicked.">× <input id="in-div-count" type="number" min="1" max="20" step="1" value="1" /></label>
         </div>
         <div class="btn-row drawer-row">
           <button id="btn-add-drawer" type="button">+ Drawers</button>
@@ -89,8 +94,9 @@
         <button id="mod-add-cancel" type="button" class="ghost">Cancel</button>
       </div>
       <div class="tabs">
-        <button class="tab active" data-tab="design" type="button">Design</button>
-        <button class="tab" data-tab="room" type="button">Room</button>
+        <!-- Wall first: lay out the whole run, then open a unit to detail it. -->
+        <button class="tab active" data-tab="room" type="button">Wall</button>
+        <button class="tab" data-tab="design" type="button">Design</button>
         <button class="tab" data-tab="sheet" type="button">Sheet</button>
         <button class="tab" data-tab="setup" type="button">Setup</button>
         <button class="tab" data-tab="drawer-setup" type="button">Drawer Setup</button>
@@ -130,19 +136,38 @@
           </button>
         </div>
         <canvas id="room-canvas" class="view"></canvas>
-        <!-- Room view: switch between flat elevation and a composed 3D scene -->
-        <div id="room-view-toggle" class="room-view-toggle hidden" role="group" aria-label="Room view mode">
+        <!-- Wall view: switch between flat elevation and a composed 3D scene -->
+        <div id="room-view-toggle" class="room-view-toggle hidden" role="group" aria-label="Wall view mode">
           <button id="rv-2d" class="active" type="button">Elevation</button>
           <button id="rv-3d" type="button">3D</button>
           <span class="rv-sep"></span>
-          <button id="rv-measure" type="button" title="Click two points to measure">📏 Measure</button>
-          <button id="rv-dims" type="button" title="Show per-module dimensions">Dims</button>
+          <button id="rv-dims" class="active" type="button" title="Show the widths and gaps along the wall">Sizes</button>
+          <button id="rv-tidy" type="button" title="Push every unit together, left to right, with no gaps">Tidy up</button>
         </div>
+        <!-- Add units straight onto the wall. Sizes come from the engine, so there is
+             nothing to type: click to drop into the first free space, or drag to aim. -->
+        <div id="wall-palette" class="wall-palette hidden">
+          <div class="wp-head">Add to this wall</div>
+          <div class="wp-body"></div>
+          <p class="wp-hint">Click one to drop it into the first free space, or drag it onto the wall to choose the spot.</p>
+        </div>
+        <!-- Wall size: preset chips, never a number field. -->
+        <div id="wall-size" class="wall-size hidden">
+          <span class="ws-label">Wall</span>
+          <button data-w="3000" type="button">3 m</button>
+          <button data-w="4000" type="button">4 m</button>
+          <button data-w="6000" type="button">6 m</button>
+          <span class="ws-sep"></span>
+          <button data-h="2400" type="button">Standard height</button>
+          <button data-h="2700" type="button">High ceiling</button>
+        </div>
+        <!-- Plain-language problems with the layout (overlaps, gaps, off the wall). -->
+        <div id="wall-issues" class="wall-issues hidden"></div>
         <!-- Floating module list for the Room view: tick to show/hide modules on the wall (overlay, so it never shrinks the canvas) -->
         <div id="room-modules" class="room-modules collapsed hidden">
           <div class="rm-head">
             <button id="rm-toggle" class="rm-toggle" type="button" aria-expanded="false" title="Expand / collapse">▾</button>
-            <span class="rm-title">Modules on wall</span>
+            <span class="rm-title">Units on this wall</span>
             <span class="rm-btns"><button id="rm-all" type="button">All</button><button id="rm-none" type="button">None</button></span>
           </div>
           <div id="rm-list" class="rm-list"></div>

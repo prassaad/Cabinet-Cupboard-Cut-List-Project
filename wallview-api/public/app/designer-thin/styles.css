@@ -307,6 +307,64 @@ canvas.view.active { display: block; }
 .rm-item.active { color: #ffd9a0; }
 .rm-item input { accent-color: var(--accent); flex: none; }
 .rm-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rm-item .rm-name { flex: 1; }
+.rm-edit { flex: none; background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 5px; padding: 1px 6px; font-size: 10px; cursor: pointer; }
+.rm-edit:hover { color: var(--ink); border-color: var(--accent); }
+.rm-none { margin: 4px 2px; color: var(--muted); font-size: 11px; }
+
+/* ── Wall designer overlays ─────────────────────────────────────────────────
+   Same glass treatment as .room-modules / .room-view-toggle so the wall canvas
+   reads as one surface. All three are overlays: they never shrink the canvas. */
+.wall-palette {
+  position: absolute; left: 12px; top: 12px; z-index: 6; width: 208px;
+  padding: 9px 10px;
+  background: rgba(47, 52, 61, 0.72);
+  backdrop-filter: blur(12px) saturate(140%); -webkit-backdrop-filter: blur(12px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 10px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+}
+.wall-palette.hidden { display: none; }
+.wp-head { color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: .04em; margin-bottom: 7px; }
+.wp-body { display: grid; gap: 5px; }
+.wp-item {
+  display: block; width: 100%; text-align: left; cursor: grab;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 9px; color: var(--ink);
+}
+.wp-item:hover { border-color: var(--accent); background: rgba(255, 255, 255, 0.09); }
+.wp-item:active { cursor: grabbing; }
+.wp-item b { display: block; font-size: 12px; font-weight: 600; }
+.wp-item span { display: block; color: var(--muted); font-size: 10px; margin-top: 1px; }
+.wp-hint { margin: 8px 1px 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+
+.wall-size {
+  position: absolute; right: 12px; bottom: 12px; z-index: 6;
+  display: inline-flex; align-items: center; gap: 3px; padding: 3px 5px;
+  background: rgba(47, 52, 61, 0.72);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px;
+}
+.wall-size.hidden { display: none; }
+.ws-label { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; padding: 0 4px; }
+.wall-size button { background: transparent; border: none; color: var(--muted); font-size: 12px; padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+.wall-size button:hover { color: var(--ink); background: rgba(255, 255, 255, 0.08); }
+.ws-sep { width: 1px; align-self: stretch; margin: 2px 3px; background: rgba(255, 255, 255, 0.14); }
+
+.wall-issues {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 12px; z-index: 6;
+  max-width: min(560px, calc(100% - 300px)); display: grid; gap: 4px;
+  padding: 7px 10px;
+  background: rgba(47, 52, 61, 0.78);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 9px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+}
+.wall-issues.hidden { display: none; }
+.wall-issues .wi { margin: 0; font-size: 11px; line-height: 1.45; color: var(--muted); }
+.wall-issues .wi::before { content: '•'; margin-right: 6px; }
+.wall-issues .wi.error { color: #f0a3a3; }
+.wall-issues .wi.error::before { content: '⚠'; }
+.wall-issues .wi.warn { color: #e6c68a; }
 @keyframes sel-pop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .sel-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; cursor: move; touch-action: none; }
 .sel-head h2 { margin: 0 0 10px; }

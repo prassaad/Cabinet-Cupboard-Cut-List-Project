@@ -2,13 +2,15 @@
 title: "ARCH-001 — Job ▸ Module ▸ Component Architecture (room-level design)"
 phase: 06_architecture
 created: 2026-06-25
-updated: 2026-06-29
-version: 1.3
-status: PHASES 1–3 IMPLEMENTED — P1 Job▸Module wrapper + switcher, P2 job-wide cut list / cross-module nesting / BOM rollup, P3 Room (run elevation) linked view, all live in prototype/ (single-module behaviour unchanged). P3 is 2D elevation, manual base-height; plan/walls (P4) and 3D room not started.
+updated: 2026-08-14
+version: 1.4
+status: PHASES 1–4a IMPLEMENTED — P1 Job▸Module wrapper + switcher, P2 job-wide cut list / cross-module nesting / BOM rollup, P3 Room (run elevation) linked view, P4a WALL DESIGNER (2026-08-14) — the run elevation became a real design surface: a first-class wall entity (`layout.runs[]`), stable module ids, module types with automatic base heights, an add-unit palette, engine-published snap guides with a client-side drag ghost, overlap/gap/off-the-wall warnings in plain language, a per-band dimension chain, Tidy up, and Wall as the landing tab with double-click drill-in. Still one wall: multi-wall, plan view and rotation (P4b/P5) not started.
 related:
   - phase 1-2 02-elicitation/session-notes/NOTES-002_Client-Review_2026-06-25.md
-  - prototype/app.js
-  - prototype/ai.js
+  - engine-vercel/app.js          # MODULE_TYPES + the wall layout block after roomBBox()
+  - engine-vercel/lib/load.js     # __renderRoom + the wall intents
+  - engine-vercel/tests/wall-parity.js
+  - wallview-api/public/app/designer-thin/thin.js
 ---
 
 # ARCH-001 — From single cabinet → Job ▸ Module ▸ Component
@@ -131,21 +133,45 @@ Module {                       // ~= today's S.cab + parts
 
 ## 9. Phased roadmap
 
-| Phase | Deliverable | Value |
-|---|---|---|
-| 1 | Job wrapper + module switcher (rename current to a Module) | multi-cabinet jobs |
-| 2 | Job-wide cut list + BOM rollup (cross-module nesting) | biggest shop ROI |
-| 3 | Run/elevation linked view (2 modules side-by-side) | "whole wall" view |
-| 4 | Plan view + walls + base-height-by-type | room/kitchen scale |
-| 5 | Module library/types, snapping, fillers/worktop | pro polish |
+| Phase | Deliverable | Value | Status |
+|---|---|---|---|
+| 1 | Job wrapper + module switcher (rename current to a Module) | multi-cabinet jobs | ✅ done |
+| 2 | Job-wide cut list + BOM rollup (cross-module nesting) | biggest shop ROI | ✅ done |
+| 3 | Run/elevation linked view (2 modules side-by-side) | "whole wall" view | ✅ done |
+| 4a | **Wall designer** — wall entity, module types + auto base height, unit palette, snapping, warnings, dimension chain, wall-first workflow | design the whole run in one place | ✅ done 2026-08-14 |
+| 4b | Plan view + multiple walls + rotation | room/kitchen scale | not started |
+| 5 | Module library, fillers/worktop | pro polish | not started |
+
+### Phase 4a as built (2026-08-14)
+- **Design document** gains `schemaVersion: 2`, `layout: { type:'run', activeRunId, runs:[{ id, name, wall:{w,h,d}, origin }] }`,
+  a stable `module.id`, `module.type`, and `placement: { runId, offsetX, baseHeight, rotation, pinned }`.
+  Migration is **lazy, on read** (`hydrateModule` + `applyJob` + `ensureLayout`) — no SQL migration, and a
+  pre-wall project still produces a byte-identical cut list (`engine-vercel/tests/wall-parity.js` §1).
+- **New intents:** `place_module`, `set_wall`, `set_module_type`, `set_module_visible`, `tidy_wall`, and an
+  extended `add_module {type, offsetX?, baseHeight?}`. `/edit` now accepts `room`/`render` so a wall edit
+  refreshes the wall and the job cut list in **one** round trip.
+- **Snapping** without breaking the thin-client rule: the engine publishes candidate guide lines
+  (`room.guides`, each with `axis/at/align/kind/label`); the client only measures the drag against them at
+  60 fps and sends the same tolerance back, so the engine's authoritative re-snap always reproduces the
+  ghost the user saw.
+- **Deferred:** job-wide `sheet`/`grainLock` (still per module — `jobNest` continues to use the active
+  module's sheet spec). Only `unit` is read through, as `room.unit`.
 
 ---
 
 ## 10. Risks / decisions to lock first
-- **Coordinate convention** (module origin, base heights per type) — decide once; everything depends on it.
-- **Shared vs per-module materials/sheet** — recommend job-wide default with module override.
-- **Selection model** across modules (active module vs global pick).
-- **Save format & migration** — versioned `Job` JSON; auto-migrate single-`S` saves.
+- **Coordinate convention** — ✅ locked 2026-08-14, ratifying what `buildBoxes`/`__renderRoom` already
+  assumed: X = 0 at the wall's left inner face; Y = 0 at the finished floor with `baseHeight` = the carcass
+  underside; Z = 0 at the wall face; module origin = bottom-left-back.
+- **Base heights per type** — ✅ in `MODULE_TYPES` (`engine-vercel/app.js`): base 0, wall 1500, tall 0.
+  ⚠️ **Open with the client:** whether base units sit on a **plinth**. If they do, `MODULE_TYPES.base.baseHeight`
+  must become the plinth height *before* customers save walls — changing it later moves every saved layout.
+  It is deliberately the single place that number lives.
+- **Shared vs per-module materials/sheet** — still per module; job-wide default with override is outstanding.
+- **Selection model** across modules — Wall selects whole units by id; parts are still selected inside the
+  Design tab (double-click a unit to drill in).
+- **Save format & migration** — ✅ versioned (`schemaVersion: 2`) and migrated on read; ids are index-derived
+  (`m1`, `m2`…) so they are deterministic even on a `/compute`, which does not return the design.
 
 ---
 
@@ -162,6 +188,26 @@ Module {                       // ~= today's S.cab + parts
 ---
 
 ## Version history
+- **v1.4 (2026-08-14)** — **Phase 4a implemented: the Wall designer.** Answers the client's "design all the
+  modules in one place, a room wall". The Room tab (a viewer you could only drag modules across) became a real
+  design surface and the **landing tab**, renamed **Wall**; the module editor is now what you drill into by
+  double-clicking a unit. Built across the three live surfaces (`engine-vercel/`, `designer-thin/`, the PHP
+  proxy) — **no new endpoints, no new tables, no SQL migration**.
+  - **Wall entity**: `layout.runs[]` with a real `wall {w,h,d}`; an unsized wall is derived from what stands on
+    it, and preset chips (3 m / 4 m / 6 m, standard / high ceiling) resize it — there is no number field.
+  - **Stable module ids** (`m1`, `m2`…) back-filled in `applyJob`, fixing an index-keyed visibility bug on the way.
+  - **Unit types** (`MODULE_TYPES`) drive size *and* base height: a wall unit lands at 1500 mm without input.
+  - **Snapping**: the engine publishes named guide lines, the client latches a ghost onto them at 60 fps and
+    returns the same tolerance, so the committed position always equals the ghost. Shift = free move.
+  - **Warnings** in plain language (overlap / gap / past the end / too tall) and a **per-height-band dimension
+    chain** with a wall total. **Tidy up** packs a run, honouring `pinned` units.
+  - The client no longer writes `placement` itself — it goes through a `place_module` intent like everything else.
+  - Fixed while building: `applyJob` rebuilt `JOB` from an object literal and so **silently dropped any new
+    top-level key on every request** (the wall would have vanished on the first edit); `add_module` set
+    `JOB.active` without moving `S`, which would have applied a new unit's preset to the previously active
+    cabinet; and a new unit blocked its own free-slot search, parking the first cabinet at 600 mm instead of 0.
+  - Regression suite: `node engine-vercel/tests/wall-parity.js` (parity + behaviour) and
+    `wallview-api/tests/EngineControllerTest.php` (the proxy forwards `room`).
 - **v1.3 (2026-06-29)** — **Phase 3 implemented** (the "see the whole wall" view) in `prototype/`: a new **Room
   tab** composes every module side-by-side as a **front elevation on one floor line**, reusing the per-module
   renderer via `withModule` + a world→screen transform (no renderer duplicated). Each module carries

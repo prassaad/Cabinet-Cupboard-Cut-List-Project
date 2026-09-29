@@ -11,6 +11,16 @@ const PRESETS = {
   wall: { w: 600, h: 720,  d: 320 },
   tall: { w: 600, h: 2100, d: 560 },
 };
+// Unit types for the Wall designer. Size comes from PRESETS; this table adds the
+// height the unit hangs at and the words a layman reads. baseHeight is measured to
+// the UNDERSIDE of the carcass, from the finished floor. Change base.baseHeight to
+// the plinth height if cabinets are built on a plinth — it is the only place it lives.
+const MODULE_TYPES = {
+  base:   { label: 'Base unit', hint: 'Sits on the floor',        preset: 'base', baseHeight: 0    },
+  wall:   { label: 'Wall unit', hint: 'Hangs above the worktop',  preset: 'wall', baseHeight: 1500 },
+  tall:   { label: 'Tall unit', hint: 'Floor to near ceiling',    preset: 'tall', baseHeight: 0    },
+  custom: { label: 'Custom',    hint: 'Your own size',            preset: null,   baseHeight: 0    },
+};
 const PART_TYPES = [
   ['Side', 'Sides'], ['TopBottom', 'Top & Bottom'], ['Shelf', 'Shelves'],
   ['Vertical', 'Verticals'], ['Door', 'Doors'], ['Back', 'Back'],
@@ -180,14 +190,17 @@ const bandInfo = (key) => { const on = EDGES.filter(e => edgeOn(key, e)); return
 //  - groove / rabbet : inset panel housed in grooves/rebates; size = inner opening + 2× engagement,
 //    recessed from the rear by `setback`; front face at z = setback + thickness
 // `b` is one box segment (see boxSegments) — omit it for the whole carcass, which is what an unsplit
-// cabinet is. A split carcass gives every box its own back, spanning that box only.
+// cabinet is. A split carcass gives every box its own back, spanning that box only — horizontally
+// between the dual verticals, vertically between the dual shelves.
 function backGeom(b) {
   const { w, h, t } = S.cab, bp = S.backPanel;
   const bx0 = b ? b.x0 : 0, bx1 = b ? b.x1 : w;                  // outer span (overlay backs cover it edge to edge)
+  const by0 = b ? b.y0 : 0, by1 = b ? b.y1 : h;
   const bl = b ? b.left : t, br = b ? b.right : w - t;           // clear opening (grooved/rabbeted backs sit in it)
-  if (bp.type === 'overlay') return { L: bx1 - bx0, W: h, x0: bx0, x1: bx1, y0: 0, y1: h, z0: 0, z1: bp.thickness, front: bp.thickness };
+  const bb = b ? b.bottom : t, bt2 = b ? b.top : h - t;
+  if (bp.type === 'overlay') return { L: bx1 - bx0, W: by1 - by0, x0: bx0, x1: bx1, y0: by0, y1: by1, z0: 0, z1: bp.thickness, front: bp.thickness };
   const eng = Math.max(0, Math.min(bp.groove, t - 1));
-  const x0 = bl - eng, x1 = br + eng, y0 = t - eng, y1 = h - t + eng;
+  const x0 = bl - eng, x1 = br + eng, y0 = bb - eng, y1 = bt2 + eng;
   const z0 = bp.setback, z1 = bp.setback + bp.thickness;
   return { L: x1 - x0, W: y1 - y0, x0, x1, y0, y1, z0, z1, front: z1 };
 }
@@ -250,7 +263,7 @@ function normalizeComps() {
     // e.g. a full-height vertical from an older layout is drawn back between the top & bottom panels.
     const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
     c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi));
-    seatDualFullHeight(c);   // a dual divider keeps splitting the carcass whatever the envelope does
+    seatDualFull(c);   // a dual keeps splitting the carcass whatever the envelope does
   }
 }
 // ---------- Dual verticals = carcass box boundaries ----------
@@ -261,8 +274,12 @@ function normalizeComps() {
 // Only a divider that spans the FULL interior height can carry the caps, so only that one splits the box; a
 // partial-height dual is still two boards (2× thickness, two cut-list rows) but leaves the carcass whole.
 const panelThick = (c) => (c && c.thick != null) ? Math.max(1, c.thick) : S.cab.t;   // ONE leaf / a plain board
-const isDual = (c) => !!(c && c.type === 'vertical' && c.dual);
-const isBoxDivider = (c) => isDual(c) && c.a0 <= innerB() + 0.5 && c.a1 >= innerT() - 0.5;
+const isDual = (c) => !!(c && (c.type === 'vertical' || c.type === 'shelf') && c.dual);
+// A dual is ALWAYS seated across the full interior (seatDualFull), so every dual is a box divider. The span
+// test is kept as the definition — it is what a hand-edited design is measured against.
+const isBoxDivider = (c) => isDual(c) && (c.type === 'vertical'
+  ? (c.a0 <= innerB() + 0.5 && c.a1 >= innerT() - 0.5)
+  : (c.a0 <= innerL() + 0.5 && c.a1 >= innerR() - 0.5));
 // Footprint a part occupies in the layout (cells, spans, hit-testing, drawing): a dual takes two board thicknesses.
 const partThick = (c) => panelThick(c) * (isDual(c) ? 2 : 1);
 // The carcass split into independent boxes by the full-height dual verticals, left → right. Per box:
@@ -272,34 +289,62 @@ const partThick = (c) => panelThick(c) * (isDual(c) ? 2 : 1);
 //               which is how the interior/openings have always been measured (innerL/innerR)
 //   L/R         its two side panels {on,x0,x1,thick,srcId}; a dual's leaves carry that divider's id
 // With no dual vertical this returns exactly one box == the classic cabinet, so every caller is unchanged.
+// Boxes form a GRID: full-height dual verticals cut it into columns, full-width dual shelves cut it into rows
+// (bottom → top). The flat index runs row by row, so a carcass with no dual shelf is exactly the old
+// left → right list and every existing face id ('T', 'BK2', …) keeps its meaning.
 function boxSegments() {
-  const { w, t } = S.cab;
-  const divs = S.comps.filter(isBoxDivider).sort((a, b) => a.pos - b.pos);
+  const { w, h, t } = S.cab;
+  const cols = S.comps.filter(c => c.type === 'vertical' && isBoxDivider(c)).sort((a, b) => a.pos - b.pos);
+  const rows = S.comps.filter(c => c.type === 'shelf' && isBoxDivider(c)).sort((a, b) => a.pos - b.pos);
   const segs = [];
-  for (let i = 0; i <= divs.length; i++) {
-    const dl = i > 0 ? divs[i - 1] : null, dr = i < divs.length ? divs[i] : null;
-    const lt = dl ? panelThick(dl) : t, rt = dr ? panelThick(dr) : t;
-    const x0 = dl ? dl.pos : 0, x1 = dr ? dr.pos : w;   // a dual straddles its pos: left leaf below it, right leaf above
-    segs.push({
-      i, x0, x1,
-      left:  dl ? dl.pos + lt : t,
-      right: dr ? dr.pos - rt : w - t,
-      openL: dl ? dl.pos + lt : innerL(),
-      openR: dr ? dr.pos - rt : innerR(),
-      L: { on: dl ? true : sideLOn(), x0, x1: x0 + lt, thick: lt, srcId: dl ? dl.id : 'L' },
-      R: { on: dr ? true : sideROn(), x0: x1 - rt, x1, thick: rt, srcId: dr ? dr.id : 'R' },
-    });
+  for (let r = 0; r <= rows.length; r++) {
+    const db = r > 0 ? rows[r - 1] : null, dt = r < rows.length ? rows[r] : null;
+    const bt = db ? panelThick(db) : t, tt = dt ? panelThick(dt) : t;
+    const y0 = db ? db.pos : 0, y1 = dt ? dt.pos : h;   // a dual straddles its pos: lower leaf below it, upper leaf above
+    // Only the carcass's own bottom/top can be deleted or mounted outset. An interior leaf is always
+    // present and always sits BETWEEN that box's sides, which is what makes
+    //   cabinet height = Σ(box openings) + 2 × thickness × rows
+    // hold — the exact mirror of the width formula for dual verticals.
+    const bOn = db ? true : capOn('bottom'), tOn = dt ? true : capOn('top');
+    const bOut = db ? false : capOutset('bottom'), tOut = dt ? false : capOutset('top');
+    // Sides run the box's full height, shortened only where a present OUTSET cap laps over them.
+    const sy0 = (bOn && bOut) ? y0 + bt : y0;
+    const sy1 = (tOn && tOut) ? y1 - tt : y1;
+    for (let k = 0; k <= cols.length; k++) {
+      const dl = k > 0 ? cols[k - 1] : null, dr = k < cols.length ? cols[k] : null;
+      const lt = dl ? panelThick(dl) : t, rt = dr ? panelThick(dr) : t;
+      const x0 = dl ? dl.pos : 0, x1 = dr ? dr.pos : w;
+      segs.push({
+        i: segs.length, col: k, row: r,
+        x0, x1, y0, y1, sy0, sy1,
+        left:  dl ? dl.pos + lt : t,
+        right: dr ? dr.pos - rt : w - t,
+        bottom: db ? db.pos + bt : t,
+        top:    dt ? dt.pos - tt : h - t,
+        openL: dl ? dl.pos + lt : innerL(),
+        openR: dr ? dr.pos - rt : innerR(),
+        openB: db ? db.pos + bt : innerB(),
+        openT: dt ? dt.pos - tt : innerT(),
+        L: { on: dl ? true : sideLOn(), x0, x1: x0 + lt, thick: lt, srcId: dl ? dl.id : 'L' },
+        R: { on: dr ? true : sideROn(), x0: x1 - rt, x1, thick: rt, srcId: dr ? dr.id : 'R' },
+        // depth: an interior leaf is a carcass boundary, so it runs the full cabinet depth like a side.
+        // Only the cabinet's own top/bottom honour their configurable depth.
+        B: { on: bOn, y0, y1: y0 + bt, thick: bt, outset: bOut, depth: db ? S.cab.d : capDepth('bottom'), srcId: db ? db.id : 'B' },
+        T: { on: tOn, y0: y1 - tt, y1, thick: tt, outset: tOut, depth: dt ? S.cab.d : capDepth('top'), srcId: dt ? dt.id : 'T' },
+      });
+    }
   }
   return segs;
 }
-// A dual vertical ALWAYS spans the full interior — that is the only span which can carry a top and bottom per
-// box, so it is what makes "dual" mean separate boxes rather than a merely thicker divider. Enforced on load
-// (normalizeComps) and after every edit (resyncComponents), so the boxes survive changes that move the
-// envelope underneath it — deleting the top cap, resizing the cabinet, switching a cap to outset. For a thick
-// divider INSIDE one box, set the part's Thickness instead of ticking Dual.
-function seatDualFullHeight(c) {
-  if (!c || c.type !== 'vertical' || !c.dual) return;
-  c.a0 = innerB(); c.a1 = innerT();
+// A dual ALWAYS spans the full interior — that is the only span which can carry the caps (a vertical) or the
+// sides (a shelf) per box, so it is what makes "dual" mean separate boxes rather than a merely thicker board.
+// Enforced on load (normalizeComps) and after every edit (resyncComponents), so the boxes survive changes that
+// move the envelope underneath — deleting a cap, resizing the cabinet, switching a cap to outset. For a thick
+// board INSIDE one box, set the part's Thickness instead of ticking Dual.
+function seatDualFull(c) {
+  if (!c || !c.dual) return;
+  if (c.type === 'vertical') { c.a0 = innerB(); c.a1 = innerT(); }
+  else if (c.type === 'shelf') { c.a0 = innerL(); c.a1 = innerR(); }
 }
 // Suffix a carcass face id per box — a single box keeps the classic 'T'/'B'/'BK' so saved custom part names
 // (S.partNames) and existing selections stay valid; only a split carcass numbers them 'T1', 'T2', …
@@ -310,19 +355,43 @@ const faceBase = (id) => String(id).replace(/\d+$/, '');
 const faceBox = (id) => { const m = /(\d+)$/.exec(String(id)); return m ? Math.max(0, +m[1] - 1) : 0; };
 // Every side panel in the module: the cabinet's own left/right plus the two leaves of each dual vertical.
 // All are full-height panels, so identical ones merge into a single cut-list row (e.g. "Side ×8" for 4 boxes).
+// Each piece carries its OWN vertical extent (y0/y1): once dual shelves stack the carcass, a side is only as
+// tall as its own box, so no caller may fall back on the whole-cabinet sideY0()/sideY1().
 function sidePieces() {
   const out = [];
-  for (const b of boxSegments()) { if (b.L.on) out.push({ ...b.L, box: b.i }); if (b.R.on) out.push({ ...b.R, box: b.i }); }
+  for (const b of boxSegments()) {
+    for (const key of ['L', 'R']) {
+      const f = b[key];
+      if (!f.on) continue;
+      out.push({ ...f, y0: b.sy0, y1: b.sy1, height: Math.max(1, b.sy1 - b.sy0), box: b.i, own: f.srcId === key });
+    }
+  }
+  // Number the carcass's own left/right faces among themselves, so a stacked carcass (which has one pair per
+  // row) keeps every side individually selectable and nameable. A single row ⇒ plain 'L'/'R', as before.
+  for (const key of ['L', 'R']) {
+    const own = out.filter(p => p.own && p.srcId === key);
+    own.forEach((p, n) => { p.srcId = boxFaceId(key, n, own.length); });
+  }
   return out;
 }
 // Top/bottom caps, ONE PIECE PER BOX: inset caps sit between that box's sides, outset caps run over them.
+// A dual shelf's two leaves come through here — the lower box's top and the upper box's bottom — carrying
+// that shelf's id, exactly as a dual vertical's leaves come through sidePieces().
 function capPieces(which) {
-  if (!capOn(which)) return [];
-  const out = capOutset(which), base = which === 'top' ? 'T' : 'B', segs = boxSegments();
-  return segs.map((b) => {
-    const x0 = out ? b.x0 : b.left, x1 = out ? b.x1 : b.right;
-    return { x0, x1, len: Math.max(1, x1 - x0), srcId: boxFaceId(base, b.i, segs.length) };
-  });
+  const base = which === 'top' ? 'T' : 'B', segs = boxSegments();
+  const out = [];
+  for (const b of segs) {
+    const f = b[base];
+    if (!f.on) continue;
+    const x0 = f.outset ? b.x0 : b.left, x1 = f.outset ? b.x1 : b.right;
+    out.push({ x0, x1, len: Math.max(1, x1 - x0), y0: f.y0, y1: f.y1, thick: f.thick, depth: f.depth,
+               outset: f.outset, box: b.i, own: f.srcId === base, srcId: f.srcId });
+  }
+  // Number the carcass's OWN faces among themselves — an interior leaf keeps the dual shelf's id, and a
+  // deleted cap must not leave a hole in the sequence. One box ⇒ plain 'T'/'B', exactly as before.
+  const own = out.filter(p => p.own);
+  own.forEach((p, n) => { p.srcId = boxFaceId(base, n, own.length); });
+  return out;
 }
 // Cell (rectangle) containing point P, bounded by parts whose span crosses P. Excludes excludeId.
 // opts.ignoreShelves / opts.ignoreVerticals let a door span across those dividers (covering several cells).
@@ -748,8 +817,18 @@ function drawerParts(c) {
 // Custom part-name override for one cut-list part. Carcass faces (string srcId L/R/T/B/BK) read S.partNames;
 // components (numeric srcId) read their own c.customName. Drawers are skipped — one drawer produces several
 // distinct sub-parts (fascia/sides/bottom/…) that must not collapse under a single name. Empty ⇒ the default.
+// A split carcass numbers its faces ('L1', 'BK2', …). An entry for the numbered face wins; failing that the
+// BASE face applies to all of them — so a name saved as 'L' before the carcass was split keeps working, and
+// naming a face once covers every box unless a particular one is overridden.
+const faceOverride = (map, id) => {
+  if (!map) return null;
+  const exact = map[id];
+  if (exact != null && exact !== '') return exact;
+  const base = map[faceBase(id)];
+  return (base != null && base !== '') ? base : null;
+};
 function resolvePartName(srcId, def) {
-  if (typeof srcId === 'string') { const o = S.partNames && S.partNames[srcId]; return (o != null && o !== '') ? o : def; }
+  if (typeof srcId === 'string') { const o = faceOverride(S.partNames, srcId); return o != null ? o : def; }
   if (typeof srcId === 'number') { const c = S.comps.find(x => x.id === srcId); if (c && c.type !== 'drawer' && c.customName) return c.customName; }
   return def;
 }
@@ -760,7 +839,7 @@ function resolvePartName(srcId, def) {
 // one drawer yields several sub-parts, and its fascia (key 'Door') and box (key 'DrawerBox') are normally
 // different boards — layer 2 already tells those apart. Empty everywhere ⇒ '' (column simply stays blank).
 function resolvePartColour(srcId, key) {
-  if (typeof srcId === 'string') { const o = S.partColours && S.partColours[srcId]; if (o != null && o !== '') return o; }
+  if (typeof srcId === 'string') { const o = faceOverride(S.partColours, srcId); if (o != null) return o; }
   else if (typeof srcId === 'number') { const c = S.comps.find(x => x.id === srcId); if (c && c.type !== 'drawer' && c.colourCode) return c.colourCode; }
   const col = S.colours || {};
   const byType = col.parts && col.parts[key];
@@ -796,28 +875,38 @@ function cutListInstances() {
   // of the boxes it separates. Every side is keyed 'Side' — interior box sides are exposed on exactly the same
   // edges as the outer ones (front always, top/bottom at the carcass ends), so they band the same and identical
   // panels merge into one row, e.g. "Side ×8" for four boxes.
-  for (const s of sidePieces()) add('Side', 'Side', sideHeight(), d, s.srcId, 'HD', s.thick);
-  // Top/bottom caps span their OWN box (inset = that box's opening, outset = its outer width) × the cap's own
-  // depth; thickness is their height. Caps are paired per box so each box reads as a complete carcass.
-  const tops = capPieces('top'), bots = capPieces('bottom'), topW = capDepth('top'), botW = capDepth('bottom');
-  for (let i = 0; i < Math.max(tops.length, bots.length); i++) {
-    const tp = tops[i], bp = bots[i];
-    if (tp && bp && Math.abs(tp.len - bp.len) < 0.5 && topW === botW) {   // both present & identical: grouped "Top / Bottom" (qty 2)
-      add('Top / Bottom', 'TopBottom', tp.len, topW, tp.srcId, 'WD', t); add('Top / Bottom', 'TopBottom', bp.len, botW, bp.srcId, 'WD', t);
+  // Each side is only as tall as ITS OWN box — once a dual shelf stacks the carcass, the sides are the
+  // stacked boxes' sides, not one full-height pair.
+  for (const s of sidePieces()) add('Side', 'Side', s.height, d, s.srcId, 'HD', s.thick);
+  // Top/bottom caps span their OWN box (inset = that box's opening, outset = its outer width) × that piece's
+  // own depth; thickness is their height. Paired per box so each box reads as a complete carcass. A dual
+  // shelf's leaves arrive here too — the lower box's top and the upper box's bottom.
+  const tops = capPieces('top'), bots = capPieces('bottom');
+  const byBox = new Map();
+  for (const p of tops) byBox.set(p.box, { tp: p });
+  for (const p of bots) byBox.set(p.box, Object.assign(byBox.get(p.box) || {}, { bp: p }));
+  for (const [, { tp, bp }] of [...byBox.entries()].sort((a, b) => a[0] - b[0])) {
+    if (tp && bp && Math.abs(tp.len - bp.len) < 0.5 && tp.depth === bp.depth && tp.thick === bp.thick) {
+      add('Top / Bottom', 'TopBottom', tp.len, tp.depth, tp.srcId, 'WD', tp.thick);   // identical pair: one group, qty 2
+      add('Top / Bottom', 'TopBottom', bp.len, bp.depth, bp.srcId, 'WD', bp.thick);
     } else {                                                             // otherwise list whichever are present, separately (own keys so each auto-bands on its own mount)
-      if (tp) add('Top', 'Top', tp.len, topW, tp.srcId, 'WD', t);
-      if (bp) add('Bottom', 'Bottom', bp.len, botW, bp.srcId, 'WD', t);
+      if (tp) add('Top', 'Top', tp.len, tp.depth, tp.srcId, 'WD', tp.thick);
+      if (bp) add('Bottom', 'Bottom', bp.len, bp.depth, bp.srcId, 'WD', bp.thick);
     }
   }
   // Back panel spans its box's width × the cabinet height; thickness is its own (thinner) board depth.
   for (const g of backPieces()) add('Back', 'Back', g.L, g.W, g.srcId, 'WH', S.backPanel.thickness);
   for (const c of S.comps) {
-    if (c.type === 'shelf') for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c), c.id, 'WD', partThick(c));
+    // A box divider was already listed above as the carcass panels it forms — the two box sides for a dual
+    // vertical, the two box caps for a dual shelf — so it must never be counted a second time here.
+    // seatDualFull keeps every dual seated across the full interior, so the `isDual` branches below only
+    // guard a hand-edited design: a dual that somehow is not a box divider is still two boards, two rows.
+    if (isBoxDivider(c)) continue;
+    if (c.type === 'shelf') {
+      for (let k = isDual(c) ? 2 : 1; k > 0; k--)
+        for (const s of shelfSegments(c)) add('Shelf', 'Shelf', s.len, compDepth(c), c.id, 'WD', panelThick(c));
+    }
     else if (c.type === 'vertical') {
-      // A box divider was already listed above as the two box sides it forms — never double-count it here.
-      // seatDualFullHeight keeps every dual full-height, so the second branch only guards a hand-edited
-      // design: a dual that somehow is not a box divider is still two boards, so it lists as two rows.
-      if (isBoxDivider(c)) continue;
       for (let k = isDual(c) ? 2 : 1; k > 0; k--)
         for (const s of verticalSegments(c)) add('Vertical', 'Vertical', s.len, compDepth(c), c.id, 'HD', panelThick(c));
     }
@@ -844,11 +933,14 @@ function groupKeyToSrc() {
   for (const it of cutListInstances()) if (!map.has(groupKey(it))) map.set(groupKey(it), it.srcId);
   return map;
 }
+// Identical panels merge into one row. `srcIds` keeps EVERY panel that row covers, so clicking any one of
+// them (the right-hand side, box 3's top, …) still finds its row — `srcId` alone is only the first of them.
 function cutList() {
   const map = new Map();
   for (const it of cutListInstances()) {
     const k = groupKey(it);
-    if (map.has(k)) map.get(k).qty++; else map.set(k, { ...it, qty: 1 });
+    if (map.has(k)) { const g = map.get(k); g.qty++; if (it.srcId != null && g.srcIds.indexOf(it.srcId) < 0) g.srcIds.push(it.srcId); }
+    else map.set(k, { ...it, qty: 1, srcIds: it.srcId != null ? [it.srcId] : [] });
   }
   return [...map.values()];
 }
@@ -872,8 +964,8 @@ function jobCutList() {
     const mname = m.name || `Module ${mi + 1}`;
     for (const it of cutListInstances()) {
       const k = mi + '|' + groupKey(it);   // group WITHIN each module so every row keeps its own module name
-      if (map.has(k)) map.get(k).qty++;
-      else map.set(k, { ...it, qty: 1, band: it.band, mname });
+      if (map.has(k)) { const g = map.get(k); g.qty++; if (it.srcId != null && g.srcIds.indexOf(it.srcId) < 0) g.srcIds.push(it.srcId); }
+      else map.set(k, { ...it, qty: 1, band: it.band, mname, srcIds: it.srcId != null ? [it.srcId] : [] });
     }
   }));
   return [...map.values()];
@@ -1080,10 +1172,15 @@ function drawModuleDims2D(m, worldToScreen) {
 // ---------- 2D design view ----------
 function partRect(c) {
   const ht = partThick(c) / 2;
+  // A box divider IS a pair of carcass panels, so it runs the full extent of those panels rather than the
+  // interior span its cell maths uses: a dual vertical spans the side height, a dual shelf spans the
+  // carcass width between the sides it caps.
+  if (isBoxDivider(c)) {
+    return c.type === 'shelf'
+      ? { x0: innerL(), x1: innerR(), y0: c.pos - ht, y1: c.pos + ht }
+      : { x0: c.pos - ht, x1: c.pos + ht, y0: sideY0(), y1: sideY1() };
+  }
   if (c.type === 'shelf') return { x0: c.a0, x1: c.a1, y0: c.pos - ht, y1: c.pos + ht };
-  // A box divider IS the two boxes' side panels, so it runs the full side height (past the caps, which are
-  // now per-box and sit between it and the next side) — not just the interior span its cell math uses.
-  if (isBoxDivider(c)) return { x0: c.pos - ht, x1: c.pos + ht, y0: sideY0(), y1: sideY1() };
   return { x0: c.pos - ht, x1: c.pos + ht, y0: c.a0, y1: c.a1 };
 }
 function clampComp(c) {
@@ -1322,17 +1419,19 @@ function renderDesign() {
   // Interior field, per box — it IS the back panel in this elevation, so each rect carries its own back's id
   // and stays independently selectable once a dual vertical has split the carcass.
   const segs = boxSegments();
-  segs.forEach((b, i) => fillRectMM(dctx, { x0: b.openL, x1: b.openR, y0: innerB(), y1: innerT(), id: S.cab.back ? boxFaceId('BK', i, segs.length) : null }, field, null));
+  segs.forEach((b, i) => fillRectMM(dctx, { x0: b.openL, x1: b.openR, y0: b.openB, y1: b.openT, id: S.cab.back ? boxFaceId('BK', i, segs.length) : null }, field, null));
   const wall = D2D.frame, wline = D2D.frameLine;
-  const sy0 = sideY0(), sy1 = sideY1();
-  // Sides (cabinet ends + the leaves of every dual vertical) and per-box caps. Each rect is tagged with the
-  // part it draws so the thin client can select it and cross-highlight the cut list without guessing geometry.
+  // Sides (cabinet ends + the leaves of every dual vertical) and per-box caps (cabinet top/bottom + the
+  // leaves of every dual shelf). Each rect carries its own extent and is tagged with the part it draws, so
+  // the thin client can select it and cross-highlight the cut list without guessing geometry.
   for (const s of sidePieces()) {
     const sel = s.srcId === S.selectedId;   // a dual's leaves carry its component id, so selecting it highlights both
-    fillRectMM(dctx, { x0: s.x0, x1: s.x1, y0: sy0, y1: sy1, id: s.srcId }, sel ? '#ffb454' : wall, sel ? '#ffd9a0' : wline);
+    fillRectMM(dctx, { x0: s.x0, x1: s.x1, y0: s.y0, y1: s.y1, id: s.srcId }, sel ? '#ffb454' : wall, sel ? '#ffd9a0' : wline);
   }
-  for (const p of capPieces('bottom')) fillRectMM(dctx, { x0: p.x0, x1: p.x1, y0: 0, y1: t, id: p.srcId }, wall, wline);
-  for (const p of capPieces('top')) fillRectMM(dctx, { x0: p.x0, x1: p.x1, y0: h - t, y1: h, id: p.srcId }, wall, wline);
+  for (const p of capPieces('bottom').concat(capPieces('top'))) {
+    const sel = p.srcId === S.selectedId;
+    fillRectMM(dctx, { x0: p.x0, x1: p.x1, y0: p.y0, y1: p.y1, id: p.srcId }, sel ? '#ffb454' : wall, sel ? '#ffd9a0' : wline);
+  }
   dctx.save();   // soft drop shadow gives shelves/dividers/drawers depth against the brighter wood field
   dctx.shadowColor = 'rgba(0,0,0,0.4)'; dctx.shadowBlur = 6; dctx.shadowOffsetX = 1; dctx.shadowOffsetY = 3;
   for (const c of S.comps) {
@@ -1387,12 +1486,19 @@ function buildBoxes() {
   const wood = P.wood, backCol = P.back, shelfCol = P.shelf, vertCol = P.vert, doorCol = P.door;
   const boxes = [];
   const push = (x0, x1, y0, y1, z0, z1, base, id, alpha) => boxes.push({ x0, x1, y0, y1, z0, z1, base, id, alpha: alpha || 1 });
-  const sy0 = sideY0(), sy1 = sideY1();
-  // Carcass shell, one set per box (a single box = the classic cabinet). Dual-vertical leaves come through
-  // sidePieces() carrying their divider's id, so clicking either face in 3D still selects that divider.
-  for (const s of sidePieces()) push(s.x0, s.x1, sy0, sy1, 0, d, wood, s.srcId);
-  { const bZ = capZRange('bottom'); for (const p of capPieces('bottom')) push(p.x0, p.x1, 0, t, bZ.z0, bZ.z1, wood, p.srcId); }
-  { const tZ = capZRange('top'); for (const p of capPieces('top')) push(p.x0, p.x1, h - t, h, tZ.z0, tZ.z1, wood, p.srcId); }
+  // Carcass shell, one set per box (a single box = the classic cabinet). Dual leaves come through
+  // sidePieces()/capPieces() carrying their divider's id, so clicking either face in 3D still selects it.
+  // Every piece brings its own extent — sides are per-box tall once dual shelves stack the carcass.
+  for (const s of sidePieces()) push(s.x0, s.x1, s.y0, s.y1, 0, d, wood, s.srcId);
+  for (const which of ['bottom', 'top']) {
+    const z = capZRange(which);
+    // An interior leaf is a full-depth carcass boundary, so it spans the cabinet rather than the
+    // configurable cap depth that only the cabinet's own top/bottom use.
+    for (const p of capPieces(which)) {
+      const z0 = p.own ? z.z0 : 0, z1 = p.own ? z.z1 : d;
+      push(p.x0, p.x1, p.y0, p.y1, z0, z1, wood, p.srcId);
+    }
+  }
   for (const g of backPieces()) push(g.x0, g.x1, g.y0, g.y1, g.z0, g.z1, backCol, g.srcId);
   const zF = back ? backGeom().front : 0;
   for (const c of S.comps) {
@@ -1681,18 +1787,225 @@ function renderRoom3D() {
   drawScaleBar(rctx, cw, ch, r3.scale);
   drawMeasureOverlay(rctx, roomMeasure);
 }
-function modPlace(m) { if (!m.placement) m.placement = { offsetX: 0, baseHeight: 0 }; return m.placement; }
-function ensureRunLayout() {   // give any module without a placement the next slot to the right, on the floor
+// hydrateModule always creates `placement`, so these guard on the FIELD, not the object.
+function modPlace(m) {
+  if (!m.placement) m.placement = {};
+  const p = m.placement;
+  if (p.offsetX == null) p.offsetX = 0;
+  if (p.baseHeight == null) p.baseHeight = 0;
+  return p;
+}
+function ensureRunLayout() {   // give any module without an offsetX the next slot to the right
   let cursor = 0;
   JOB.modules.forEach(m => {
-    if (!m.placement) m.placement = { offsetX: cursor, baseHeight: 0 };
-    cursor = Math.max(cursor, m.placement.offsetX + m.cab.w);
+    if (!m.placement) m.placement = {};
+    const p = m.placement;
+    if (p.offsetX == null) { p.offsetX = cursor; if (p.baseHeight == null) p.baseHeight = 0; }
+    cursor = Math.max(cursor, p.offsetX + m.cab.w);
   });
 }
 function roomBBox() {
   let maxX = 1, maxY = 1;
   JOB.modules.forEach(m => { const p = modPlace(m); maxX = Math.max(maxX, p.offsetX + m.cab.w); maxY = Math.max(maxY, p.baseHeight + m.cab.h); });
   return { w: maxX, h: maxY };
+}
+
+/* ── Wall (run) layout ───────────────────────────────────────────────────────
+   The wall the units are designed on. Coordinates: X = 0 at the wall's left inner
+   face; Y = 0 at the finished floor and baseHeight = the carcass UNDERSIDE; Z = 0 at
+   the wall face. A module's origin is its bottom-left-back corner — the convention
+   buildBoxes() and __renderRoom() already use, so nothing existing has to move.
+   `layout.runs` is an array from day one: a second wall is a data addition, not a
+   rewrite. Everything here is derived on read, so old saves need no migration. */
+function ensureLayout() {
+  if (!JOB.layout || !Array.isArray(JOB.layout.runs) || !JOB.layout.runs.length) {
+    JOB.layout = { type: 'run', activeRunId: 'run-1',
+      runs: [{ id: 'run-1', name: 'Wall 1', wall: null, origin: { x: 0, y: 0, rot: 0 } }] };
+  }
+  if (!JOB.layout.type) JOB.layout.type = 'run';
+  const first = JOB.layout.runs[0];
+  if (!JOB.layout.activeRunId || !JOB.layout.runs.some(r => r.id === JOB.layout.activeRunId)) JOB.layout.activeRunId = first.id;
+  // Only touch runId here. modPlace() would default offsetX to 0 and rob
+  // ensureRunLayout of its chance to lay unplaced modules out left-to-right.
+  JOB.modules.forEach(m => { if (!m.placement) m.placement = {}; if (!m.placement.runId) m.placement.runId = first.id; });
+  ensureRunLayout();
+  assignModuleIds(JOB.modules);   // ops that push a module (add_module) land here too
+  JOB.layout.runs.forEach(ensureWall);
+}
+// A wall nobody has sized is derived from what stands on it, so a layman never has
+// to type a number to get a sensible canvas.
+function ensureWall(run) {
+  if (run.wall && run.wall.w > 0 && run.wall.h > 0) return run.wall;
+  const bb = roomBBox();
+  run.wall = { w: Math.max(3000, Math.ceil((bb.w * 1.15) / 100) * 100),
+               h: Math.max(2400, Math.ceil(bb.h / 100) * 100),
+               d: 600 };
+  return run.wall;
+}
+function activeRun() { ensureLayout(); return JOB.layout.runs.find(r => r.id === JOB.layout.activeRunId) || JOB.layout.runs[0]; }
+function findRun(runId) { ensureLayout(); return (runId && JOB.layout.runs.find(r => r.id === runId)) || activeRun(); }
+const runModules = (runId) => JOB.modules.filter(m => modPlace(m).runId === runId);
+const modBox = (m) => { const p = modPlace(m); return {
+  x0: p.offsetX, x1: p.offsetX + m.cab.w, y0: p.baseHeight, y1: p.baseHeight + m.cab.h,
+  z0: 0, z1: m.cab.d || 560 }; };
+const modLabel = (m) => m.name || 'unit';
+
+// Candidate lines a dragged unit can latch onto. The ENGINE owns which lines exist
+// and what they are called; the client only measures distance to them during a drag
+// (it cannot round-trip at 60fps) and the engine re-applies the same snap on commit,
+// so the committed position always equals the ghost the user saw.
+//   align: how the dragged unit lines up with `at` — min = its left/bottom edge,
+//          max = its right/top edge, center = its centre.
+function wallGuides(runId) {
+  const run = findRun(runId), wall = ensureWall(run), out = [];
+  const push = (axis, at, align, kind, label, sourceId) =>
+    out.push({ axis, at: Math.round(at), align, kind, label, sourceId: sourceId || null });
+
+  push('x', 0,          'min',    'wall-start', 'Against the left wall');
+  push('x', wall.w,     'max',    'wall-end',   'Against the right wall');
+  push('x', wall.w / 2, 'center', 'wall-mid',   'Centred on the wall');
+  push('y', 0,          'min',    'floor',      'On the floor');
+  push('y', wall.h,     'max',    'ceiling',    'Up against the ceiling');
+  push('y', MODULE_TYPES.wall.baseHeight, 'min', 'standard-wall', 'Standard wall-unit height');
+
+  for (const m of runModules(runId)) {
+    const b = modBox(m), nm = modLabel(m);
+    push('x', b.x0, 'max',  'module-edge',  `Next to “${nm}”`, m.id);          // my right edge → its left
+    push('x', b.x1, 'min',  'module-edge',  `Next to “${nm}”`, m.id);          // my left edge → its right
+    push('x', b.x0, 'min',  'module-align', `Lined up with “${nm}”`, m.id);
+    push('x', b.x1, 'max',  'module-align', `Lined up with “${nm}”`, m.id);
+    push('y', b.y1, 'min',  'module-stack', `Sitting on “${nm}”`, m.id);
+    push('y', b.y0, 'min',  'module-align', `Same height as “${nm}”`, m.id);
+    push('y', b.y1, 'max',  'module-align', `Tops line up with “${nm}”`, m.id);
+  }
+  return out;
+}
+
+// One dimension chain per height band. Base and wall units share the same X range,
+// so a single flat chain would be nonsense — group by baseHeight (100 mm buckets).
+function wallDimChain(runId) {
+  const run = findRun(runId), wall = ensureWall(run), bands = new Map();
+  for (const m of runModules(runId)) {
+    if (m.roomHidden) continue;
+    const key = Math.round(modPlace(m).baseHeight / 100) * 100;
+    if (!bands.has(key)) bands.set(key, []);
+    bands.get(key).push(m);
+  }
+  const rows = [];
+  [...bands.keys()].sort((a, b) => a - b).forEach(key => {
+    const mods = bands.get(key).sort((a, b) => modPlace(a).offsetX - modPlace(b).offsetX);
+    const segments = []; let cursor = 0;
+    for (const m of mods) {
+      const b = modBox(m);
+      if (b.x0 - cursor > 0.5) segments.push({ kind: 'gap', x0: cursor, x1: b.x0, mm: Math.round(b.x0 - cursor), ids: [m.id] });
+      segments.push({ kind: 'module', x0: b.x0, x1: b.x1, mm: Math.round(b.x1 - b.x0), ids: [m.id], name: modLabel(m) });
+      cursor = Math.max(cursor, b.x1);
+    }
+    if (wall.w - cursor > 0.5) segments.push({ kind: 'gap', x0: cursor, x1: wall.w, mm: Math.round(wall.w - cursor), ids: [], end: true });
+    rows.push({ kind: key === 0 ? 'floor' : 'upper', band: key, y: key, segments,
+      filled: Math.round(segments.filter(s => s.kind === 'module').reduce((a, s) => a + s.mm, 0)),
+      total: { x0: 0, x1: wall.w, mm: Math.round(wall.w) } });
+  });
+  return { rows, wallW: Math.round(wall.w) };
+}
+
+// Problems worth telling the user about, each already phrased for a layman.
+function wallIssues(runId) {
+  const run = findRun(runId), wall = ensureWall(run), list = runModules(runId), out = [];
+  for (let a = 0; a < list.length; a++) for (let b = a + 1; b < list.length; b++) {
+    const A = modBox(list[a]), B = modBox(list[b]);
+    const ox = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+    const oy = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+    const oz = Math.min(A.z1, B.z1) - Math.max(A.z0, B.z0);
+    if (ox > 0.5 && oy > 0.5 && oz > 0.5) out.push({ kind: 'overlap', severity: 'error',
+      ids: [list[a].id, list[b].id], mm: Math.round(ox),
+      x0: Math.max(A.x0, B.x0), x1: Math.min(A.x1, B.x1), y0: Math.max(A.y0, B.y0), y1: Math.min(A.y1, B.y1),
+      message: `“${modLabel(list[a])}” and “${modLabel(list[b])}” overlap by ${Math.round(ox)} mm — drag one apart.` });
+  }
+  for (const m of list) {
+    const B = modBox(m), nm = modLabel(m);
+    if (B.x1 > wall.w + 0.5) out.push({ kind: 'past-end', severity: 'error', ids: [m.id], mm: Math.round(B.x1 - wall.w),
+      message: `“${nm}” sticks out past the end of the wall by ${Math.round(B.x1 - wall.w)} mm.` });
+    if (B.x0 < -0.5) out.push({ kind: 'past-start', severity: 'error', ids: [m.id], mm: Math.round(-B.x0),
+      message: `“${nm}” starts before the left-hand wall.` });
+    if (B.y1 > wall.h + 0.5) out.push({ kind: 'too-tall', severity: 'error', ids: [m.id], mm: Math.round(B.y1 - wall.h),
+      message: `“${nm}” is ${Math.round(B.y1 - wall.h)} mm taller than the wall.` });
+  }
+  for (const row of wallDimChain(runId).rows) for (const s of row.segments) {
+    if (s.kind !== 'gap' || s.mm < 3) continue;
+    out.push({ kind: 'gap', severity: s.mm >= 300 ? 'info' : 'warn', ids: s.ids || [], row: row.kind,
+      x0: s.x0, x1: s.x1, y: row.y, mm: s.mm,
+      message: s.mm >= 300
+        ? `${s.mm} mm of empty wall here — room for another unit.`
+        : `${s.mm} mm gap here — add a filler panel or widen a unit.` });
+  }
+  return out;
+}
+
+// Stretches of wall at this height where nothing stands — powers zero-input
+// auto-place. excludeId keeps the unit being placed from blocking its own slot.
+function wallFreeSlots(runId, baseHeight, height, excludeId) {
+  const run = findRun(runId), wall = ensureWall(run);
+  const y0 = +baseHeight || 0, y1 = y0 + (+height || 1);
+  const taken = runModules(runId).filter(m => m.id !== excludeId).map(modBox)
+    .filter(b => Math.min(b.y1, y1) - Math.max(b.y0, y0) > 0.5)      // only what shares this height band
+    .sort((a, b) => a.x0 - b.x0);
+  const slots = []; let cursor = 0;
+  for (const b of taken) {
+    if (b.x0 - cursor > 0.5) slots.push({ x0: cursor, x1: b.x0, mm: Math.round(b.x0 - cursor) });
+    cursor = Math.max(cursor, b.x1);
+  }
+  if (wall.w - cursor > 0.5) slots.push({ x0: cursor, x1: wall.w, mm: Math.round(wall.w - cursor) });
+  return slots;
+}
+
+// The authoritative snap, re-run server-side on every commit with the same candidate
+// maths the client used during the drag — so the two can never disagree.
+function snapPlacement(m, offsetX, baseHeight, tolMM) {
+  const runId = modPlace(m).runId, wall = ensureWall(findRun(runId));
+  const tol = (+tolMM > 0) ? +tolMM : 20, guides = wallGuides(runId);
+  const pick = (axis, raw, size) => {
+    let best = raw, bd = tol;
+    for (const g of guides) {
+      if (g.axis !== axis || g.sourceId === m.id) continue;
+      const pos = g.align === 'max' ? g.at - size : g.align === 'center' ? g.at - size / 2 : g.at;
+      const d = Math.abs(pos - raw);
+      if (d < bd) { bd = d; best = pos; }
+    }
+    return Math.round(best);
+  };
+  return {
+    offsetX: Math.max(0, Math.min(pick('x', +offsetX || 0, m.cab.w), Math.max(0, wall.w - m.cab.w))),
+    baseHeight: Math.max(0, pick('y', +baseHeight || 0, m.cab.h)),
+  };
+}
+
+// One-click "Tidy up": push everything in each height band together, left to right.
+// Pinned units stay exactly where they are and the rest flow around them.
+function tidyRun(runId, mode) {
+  const spread = mode === 'spread', wall = ensureWall(findRun(runId));
+  const bands = new Map();
+  for (const m of runModules(runId)) {
+    const key = Math.round(modPlace(m).baseHeight / 100) * 100;
+    if (!bands.has(key)) bands.set(key, []);
+    bands.get(key).push(m);
+  }
+  bands.forEach(mods => {
+    mods.sort((a, b) => modPlace(a).offsetX - modPlace(b).offsetX);
+    if (spread) {
+      const used = mods.reduce((a, m) => a + m.cab.w, 0);
+      const gap = mods.length > 1 ? Math.max(0, (wall.w - used) / (mods.length - 1)) : 0;
+      let x = 0;
+      mods.forEach((m, i) => { modPlace(m).offsetX = Math.round(x); x += m.cab.w + (i < mods.length - 1 ? gap : 0); });
+      return;
+    }
+    let cursor = 0;
+    for (const m of mods) {
+      const p = modPlace(m);
+      if (p.pinned) { cursor = Math.max(cursor, p.offsetX + m.cab.w); continue; }
+      p.offsetX = Math.round(cursor); cursor += m.cab.w;
+    }
+  });
 }
 function fillRectWorld(ctx, r, fill, stroke, tf) {
   const a = tf(r.x0, r.y1), b = tf(r.x1, r.y0);   // (x0,y1)=top-left, (x1,y0)=bottom-right in screen space
@@ -1706,12 +2019,10 @@ function drawModuleElevation(ctx, m, worldToScreen) {
   const tf = (xmm, ymm) => worldToScreen(p.offsetX + xmm, p.baseHeight + ymm);
   withModule(m, () => {
     const { h, t } = S.cab, fillR = (r, f, s) => fillRectWorld(ctx, r, f, s, tf);
-    for (const b of boxSegments()) fillR({ x0: b.openL, x1: b.openR, y0: innerB(), y1: innerT() }, '#222831', null);
+    for (const b of boxSegments()) fillR({ x0: b.openL, x1: b.openR, y0: b.openB, y1: b.openT }, '#222831', null);
     const wall = '#6b7686', wline = '#aeb7c6';
-    const sy0 = sideY0(), sy1 = sideY1();
-    for (const s of sidePieces()) fillR({ x0: s.x0, x1: s.x1, y0: sy0, y1: sy1 }, wall, wline);
-    for (const p of capPieces('bottom')) fillR({ x0: p.x0, x1: p.x1, y0: 0, y1: t }, wall, wline);
-    for (const p of capPieces('top')) fillR({ x0: p.x0, x1: p.x1, y0: h - t, y1: h }, wall, wline);
+    for (const s of sidePieces()) fillR({ x0: s.x0, x1: s.x1, y0: s.y0, y1: s.y1 }, wall, wline);
+    for (const p of capPieces('bottom').concat(capPieces('top'))) fillR({ x0: p.x0, x1: p.x1, y0: p.y0, y1: p.y1 }, wall, wline);
     const Pe = woodPal();
     for (const c of S.comps) { if (c.type === 'drawer' || isBoxDivider(c)) continue; fillR(partRect(c), Pe.p2d, Pe.e2d); }
     for (const c of S.comps) if (c.type === 'drawer') for (const f of drawerFascias(c)) fillR({ x0: f.x0, x1: f.x1, y0: f.y0, y1: f.y1 }, Pe.p2d, Pe.e2d);
@@ -2028,7 +2339,7 @@ function resyncComponents() {
     if (c.type === 'shelf' || c.type === 'vertical') {
       const lo = c.type === 'shelf' ? innerL() : innerB(), hi = c.type === 'shelf' ? innerR() : innerT();
       c.a0 = Math.max(lo, Math.min(c.a0, hi)); c.a1 = Math.max(c.a0, Math.min(c.a1, hi));
-      seatDualFullHeight(c);   // a dual divider keeps splitting the carcass whatever the envelope does
+      seatDualFull(c);   // a dual keeps splitting the carcass whatever the envelope does
     }
     if (c.depth != null) c.depth = Math.min(c.depth, S.cab.d);
     if (c.setback != null) c.setback = Math.min(c.setback, S.cab.d);
@@ -2117,12 +2428,10 @@ function addComp(type, dual) {
   const cell = cellAt(p.x, p.y, null);
   const c = { id: S._seq++, type };
   if (type === 'shelf') { c.a0 = cell.left; c.a1 = cell.right; c.pos = (cell.bottom + cell.top) / 2; }
-  else {
-    c.a0 = cell.bottom; c.a1 = cell.top; c.pos = (cell.left + cell.right) / 2;
-    // A dual vertical is added full-height (spanning the interior) so it actually splits the carcass into
-    // separate boxes — a dual confined to one cell would only be a thick divider.
-    if (dual) { c.dual = true; c.a0 = innerB(); c.a1 = innerT(); }
-  }
+  else { c.a0 = cell.bottom; c.a1 = cell.top; c.pos = (cell.left + cell.right) / 2; }
+  // A dual is added spanning the FULL interior so it actually splits the carcass into separate boxes —
+  // confined to one cell it would only be a thick board. seatDualFull applies the right axis for the type.
+  if (dual) { c.dual = true; seatDualFull(c); }
   clampComp(c); S.comps.push(c); S.selectedId = c.id; render();
 }
 const drawerCount = () => { const v = parseInt(($('in-drawer-count') || {}).value, 10) || 1; return Math.max(1, Math.min(12, v)); };
@@ -2160,10 +2469,16 @@ function carcassPartInfo(id) {
   const { d, t } = S.cab, base = faceBase(id), bi = faceBox(id);
   // Spatial w/h/d (left-right / top-bottom / front-back) + board thickness for each fixed part. On a carcass
   // split by dual verticals the id carries its box number, so each box's own cap/back size is reported.
-  if (base === 'L' || base === 'R') return { name: 'Side', w: t, h: sideHeight(), d, thick: t };
+  // Look each face up by its OWN id, never by array position: a deleted cap or a stacked carcass means the
+  // n-th piece is not the n-th box.
+  if (base === 'L' || base === 'R') {
+    const s = sidePieces().find(p => p.srcId === id) || sidePieces().find(p => faceBase(p.srcId) === base);
+    return s ? { name: 'Side', w: s.thick, h: s.height, d, thick: s.thick } : null;
+  }
   if (base === 'T' || base === 'B') {
-    const which = base === 'T' ? 'top' : 'bottom', p = capPieces(which)[bi];
-    return p ? { name: base === 'T' ? 'Top' : 'Bottom', w: p.len, h: t, d: capDepth(which), thick: t } : null;
+    const which = base === 'T' ? 'top' : 'bottom';
+    const p = capPieces(which).find(x => x.srcId === id);
+    return p ? { name: base === 'T' ? 'Top' : 'Bottom', w: p.len, h: p.thick, d: p.depth, thick: p.thick } : null;
   }
   if (base === 'BK') { const g = backPieces()[bi]; return g ? { name: 'Back', w: g.L, h: g.W, d: S.backPanel.thickness, thick: S.backPanel.thickness } : null; }
   if (id === 'DOOR' || id === 'DOORL' || id === 'DOORR') { const r = doorRects().find(r => r.id === id); return r ? { name: 'Door', w: r.x1 - r.x0, h: r.y1 - r.y0, d: t, thick: t } : null; }
@@ -2281,12 +2596,13 @@ function renderSelectionPanel() {
       row('sel-thick', 'Thickness', fmt(panelThick(comp))) +   // ONE board — a dual is two of these
       row('sel-depth', 'Depth', fmt(compDepth(comp))) +
       row('sel-setback', 'Setback from back', fmt(comp.setback || 0)) +
-      // Dual panel: two boards face-to-face, splitting the carcass into separate boxes (own top/bottom/back each).
-      (isShelf ? '' : `<label class="sel-row"><span>Dual panel</span><input type="checkbox" id="sel-dual"${comp.dual ? ' checked' : ''}></label>`);
+      // Dual panel: two boards face-to-face, splitting the carcass into separate boxes. A dual vertical
+      // splits it side by side, a dual shelf stacks it — each box gets its own sides, top, bottom and back.
+      `<label class="sel-row"><span>Dual panel</span><input type="checkbox" id="sel-dual"${comp.dual ? ' checked' : ''}></label>`;
     const segs = isShelf ? shelfSegments(comp) : verticalSegments(comp), usable = usableDepth();
     derived.textContent =
-      (isBoxDivider(comp) ? `Dual panel — splits the carcass; each box gets its own top, bottom & back · ` :
-       isDual(comp) ? `Dual panel (two boards) — full height is needed to split the carcass into boxes · ` : '') +
+      (isBoxDivider(comp) ? `Dual panel — splits the carcass into ${isShelf ? 'stacked' : 'side-by-side'} boxes; each gets its own sides, top, bottom & back · ` :
+       isDual(comp) ? `Dual panel (two boards) — the full ${isShelf ? 'width' : 'height'} is needed to split the carcass into boxes · ` : '') +
       (segs.length > 1 ? `Cut into ${segs.length} pieces · ` : '') +
       (comp.depth != null ? 'Custom depth' : `Depth = usable ${fmtU(usable)}`) +
       ` · Setback = gap from the back panel front face.` +
@@ -2298,14 +2614,15 @@ function renderSelectionPanel() {
     const mnt = capOutset(which) ? 'outset' : 'inset', anc = cap.anchor || 'back';
     const optM = (v, lbl) => `<option value="${v}"${mnt === v ? ' selected' : ''}>${lbl}</option>`;
     const optA = (v, lbl) => `<option value="${v}"${anc === v ? ' selected' : ''}>${lbl}</option>`;
-    const capPc = capPieces(which)[faceBox(id)];
+    const capPc = capPieces(which).find(p => p.srcId === id);
     title.innerHTML = `${which === 'top' ? 'Top' : 'Bottom'} panel <small>(${u})</small>`;
     fields.innerHTML =
       nameRow(id, which === 'top' ? 'Top' : 'Bottom') +
       `<label class="sel-row"><span>Mount</span><select id="sel-cap-mount">${optM('inset', 'Inset (between sides)')}${optM('outset', 'Outset (over sides)')}</select></label>` +
       row('sel-cap-depth', 'Depth', fmt(capDepth(which))) +
       `<label class="sel-row"><span>Anchor</span><select id="sel-cap-anchor">${optA('back', 'Back')}${optA('center', 'Center')}${optA('front', 'Front')}</select></label>`;
-    derived.textContent = `Panel ${fmtU(capPc ? capPc.len : 0)} × ${fmtU(capDepth(which))} · ${mnt}. Sides now ${fmtU(sideHeight())}. Depth = full ⇒ aligned to sides. Delete removes it (restore in Setup).`;
+    const capSide = sidePieces().find(p => p.box === (capPc ? capPc.box : -1));
+    derived.textContent = `Panel ${fmtU(capPc ? capPc.len : 0)} × ${fmtU(capDepth(which))} · ${mnt}. Sides now ${fmtU(capSide ? capSide.height : sideHeight())}. Depth = full ⇒ aligned to sides. Delete removes it (restore in Setup).`;
     actions.classList.remove('hidden');   // both Update and Delete available
   } else {
     const info = carcassPartInfo(id);
@@ -2464,12 +2781,13 @@ function applySelectedEdit() {
   // Setback from the back panel front face (0 = sits against the back).
   const setback = get('sel-setback');
   if (setback > 0.5) c.setback = Math.max(0, Math.min(setback, S.cab.d)); else delete c.setback;
-  // Dual panel — turning it on makes this vertical two boards and, when it runs the full interior height,
-  // a carcass boundary: the caps and back split into a separate set per box (see boxSegments).
+  // Dual panel — turning it on makes this part two boards and a carcass boundary: the carcass splits into
+  // separate boxes, each with its own sides, top, bottom and back (see boxSegments). A vertical splits it
+  // side by side; a shelf stacks it.
   const dualEl = $('sel-dual');
-  if (dualEl && c.type === 'vertical') {
+  if (dualEl && (c.type === 'vertical' || c.type === 'shelf')) {
     if (dualEl.checked) c.dual = true; else delete c.dual;
-    seatDualFullHeight(c);   // a dual always runs the full interior, so the Height field above does not apply to it
+    seatDualFull(c);   // a dual always runs the full interior, so the span field above does not apply to it
   }
   clampComp(c); render();   // recalculates cut list, sheets, BOM
 }
@@ -2511,11 +2829,12 @@ function hitTest(mx, my) {
     if (c.type === 'door') { const cl = doorSpan(c); if (mx >= cl.left && mx <= cl.right && my >= cl.bottom && my <= cl.top) return c; continue; }
     const r = partRect(c); if (mx >= r.x0 - tol && mx <= r.x1 + tol && my >= r.y0 - tol && my <= r.y1 + tol) return c;
   }
-  // Carcass rails (top/bottom caps + sides): fall through to these only if no component was hit.
-  const { h, t } = S.cab, sy0 = sideY0(), sy1 = sideY1();
-  for (const p of capPieces('top')) if (my >= h - t - tol && my <= h + tol && mx >= p.x0 - tol && mx <= p.x1 + tol) return { id: p.srcId };
-  for (const p of capPieces('bottom')) if (my >= -tol && my <= t + tol && mx >= p.x0 - tol && mx <= p.x1 + tol) return { id: p.srcId };
-  for (const s of sidePieces()) if (mx >= s.x0 - tol && mx <= s.x1 + tol && my >= sy0 - tol && my <= sy1 + tol) return { id: s.srcId };
+  // Carcass rails (top/bottom caps + sides): fall through to these only if no component was hit. Each piece
+  // brings its own rectangle, so this works for a stacked carcass without any whole-cabinet assumptions.
+  for (const p of capPieces('top').concat(capPieces('bottom')))
+    if (my >= p.y0 - tol && my <= p.y1 + tol && mx >= p.x0 - tol && mx <= p.x1 + tol) return { id: p.srcId };
+  for (const s of sidePieces())
+    if (mx >= s.x0 - tol && mx <= s.x1 + tol && my >= s.y0 - tol && my <= s.y1 + tol) return { id: s.srcId };
   return null;
 }
 let drag = null;
@@ -2745,12 +3064,38 @@ function hydrateModule(raw) {
   }
   if (m.band && m.band.Divider) { m.band.Vertical = m.band.Divider; delete m.band.Divider; }
   m.band = Object.assign(defaultBand(), m.band || {});
+  // Wall designer (schema v2). Object.assign(DEFAULTS(), raw) above already kept
+  // raw.id/type/placement when present — only fill the holes. `id` is deliberately
+  // NOT assigned here: applyJob owns uniqueness because it can see the whole array.
+  if (!m.type) m.type = MODULE_TYPES[m.preset] ? m.preset : 'custom';
+  if (!m.placement) m.placement = {};                       // ensureRunLayout fills offsetX
+  if (m.placement.baseHeight == null) m.placement.baseHeight = 0;
+  if (m.placement.rotation == null) m.placement.rotation = 0;
+  if (m.placement.pinned == null) m.placement.pinned = false;
   return m;
 }
+// Give every module a stable id. Index-derived (m1, m2 …) so the answer is identical
+// on every request for an unchanged array — /compute does not return the design, so
+// ids assigned during a compute must still match the ones the client already holds.
+// Existing ids are always kept; only duplicates and blanks are reassigned.
+function assignModuleIds(mods) {
+  const seen = new Set();
+  mods.forEach(m => { if (m.id && !seen.has(m.id)) seen.add(m.id); else m.id = null; });
+  let n = 0;
+  mods.forEach(m => { if (!m.id) { do { n++; } while (seen.has('m' + n)); m.id = 'm' + n; seen.add(m.id); } });
+  return mods;
+}
 function applyJob(job) {
-  const mods = (job.modules || []).map(hydrateModule);
+  const mods = assignModuleIds((job.modules || []).map(hydrateModule));
   mods.forEach((m, i) => { if (!m.name) m.name = `Module ${i + 1}`; });
-  JOB = { name: job.name || 'Job 1', modules: mods, active: mods.length ? 0 : -1, _mseq: Math.max(job._mseq || 0, mods.length) };
+  // Carry EVERY top-level key forward — only these are engine-owned. A literal here
+  // would silently drop `layout` (and anything added later) on every single request,
+  // and __edit returns this object as the new client-side design.
+  JOB = Object.assign({}, job, {
+    name: job.name || 'Job 1', modules: mods,
+    active: mods.length ? 0 : -1, _mseq: Math.max(job._mseq || 0, mods.length),
+  });
+  JOB.schemaVersion = 2;
   if (mods.length) {
     JOB.active = Math.min(Math.max(0, job.active | 0), mods.length - 1);
     for (const m of mods) { S = m; normalizeComps(); }   // normalizeComps reads the global S
@@ -2758,6 +3103,7 @@ function applyJob(job) {
   } else {
     S = DEFAULTS(); S.name = '';
   }
+  ensureLayout();   // wall + placements exist before anything reads them
   if (cellMode) setCellMode(false);
   renderModuleBar(); syncInputs(); render();
 }
@@ -2985,7 +3331,7 @@ $('btn-door-place').addEventListener('click', placeDoorFromCells);
 inReveal.addEventListener('input', () => { S.doors.reveal = Math.max(0, toMM(parseFloat(inReveal.value) || 0)); render(); });
 inExplode.addEventListener('input', () => { S.explode = parseFloat(inExplode.value) || 0; render(); });
 inDims.addEventListener('change', () => { S.showDims = inDims.checked; render(); });
-$('btn-add-shelf').addEventListener('click', () => addComp('shelf'));
+$('btn-add-shelf').addEventListener('click', () => addComp('shelf', !!(($('in-shelf-dual') || {}).checked)));
 // "Dual panel" (when the host page offers the toggle) creates the vertical as two boards that split the
 // carcass into separate boxes; otherwise it is a plain divider inside the current box.
 $('btn-add-vertical').addEventListener('click', () => addComp('vertical', !!(($('in-vert-dual') || {}).checked)));
@@ -3126,10 +3472,18 @@ function aiSetDoors(count, reveal) {
   }
   syncInputs(); render();
 }
-function aiAddShelves(count, fromMM, toMM) {
+function aiAddShelves(count, fromMM, toMM, dual) {
   const a0 = fromMM != null ? fromMM : innerL(), a1 = toMM != null ? toMM : innerR();
-  const lo = innerB(), hi = innerT(), n = Math.max(1, Math.min(50, count | 0));
-  for (let k = 1; k <= n; k++) S.comps.push({ id: S._seq++, type: 'shelf', a0, a1, pos: lo + (hi - lo) * k / (n + 1) });
+  const n = Math.max(1, Math.min(50, count | 0));
+  // Dual shelves stack the carcass, so equal BOXES (not equal gaps between shelves) is what "evenly spaced"
+  // means: n shelves make n+1 boxes, each consuming its own top and bottom, and the centres land on h·k/(n+1).
+  // Every box opening then comes out at h/(n+1) − 2t. Single shelves stay evenly spread across the interior.
+  const lo = dual ? 0 : innerB(), hi = dual ? S.cab.h : innerT();
+  for (let k = 1; k <= n; k++) {
+    const c = { id: S._seq++, type: 'shelf', a0, a1, pos: lo + (hi - lo) * k / (n + 1) };
+    if (dual) { c.dual = true; seatDualFull(c); }
+    S.comps.push(c);
+  }
   S.selectedId = null; render(); return { ok: true, added: n };
 }
 function aiAddVerticals(count, fromMM, toMM, dual) {
@@ -3141,7 +3495,7 @@ function aiAddVerticals(count, fromMM, toMM, dual) {
   const lo = dual ? 0 : innerL(), hi = dual ? S.cab.w : innerR();
   for (let k = 1; k <= n; k++) {
     const c = { id: S._seq++, type: 'vertical', a0, a1, pos: lo + (hi - lo) * k / (n + 1) };
-    if (dual) c.dual = true;
+    if (dual) { c.dual = true; seatDualFull(c); }
     S.comps.push(c);
   }
   S.selectedId = null; render(); return { ok: true, added: n };

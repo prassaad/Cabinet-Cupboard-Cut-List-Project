@@ -68,6 +68,10 @@ final class EngineController
             'op' => $op,
             'args' => is_array($args) ? $args : [],
             'scope' => $r->input('scope') === 'job' ? 'job' : 'module',
+            // The Wall tab asks for the room model back with the edit, so one round
+            // trip refreshes the wall and the cut list together.
+            'render' => $r->input('render', true) !== false,
+            'room' => (bool) $r->input('room', false),
         ]));
     }
 

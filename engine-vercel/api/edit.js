@@ -1,5 +1,5 @@
 // POST /edit  (mapped from /edit via vercel.json rewrite)
-// Body: { design, op, args?, scope? }  ->  { design, model }
+// Body: { design, op, args?, scope?, render?, room? }  ->  { design, model }
 const { getEngine } = require('../lib/engine');
 const { requireKey, readJson } = require('../lib/http');
 
@@ -15,7 +15,9 @@ module.exports = async (req, res) => {
 
   try {
     const scope = p.scope === 'job' ? 'job' : 'module';
-    const result = getEngine().edit(p.design, String(p.op), p.args || {}, scope);
+    // render/room let the Wall tab refresh the wall in the same round trip as the edit.
+    const result = getEngine().edit(p.design, String(p.op), p.args || {}, scope,
+      { render: p.render !== false, room: !!p.room });
     return res.status(200).json(result);
   } catch (e) {
     return res.status(500).json({ error: { code: 'engine_error', message: String(e && e.message || e) } });

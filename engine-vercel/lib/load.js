@@ -138,23 +138,33 @@ function loadEngine(appSrc) {
       }
       return target;
     }
+    ;function __findModule(id) {
+      // Modules are addressed by their stable id (applyJob guarantees one).
+      for (var i = 0; i < JOB.modules.length; i++) if (JOB.modules[i].id === id) return JOB.modules[i];
+      return null;
+    }
     ;function __renderRoom() {
       // Job/wall elevation: each module's 2D rects positioned at its wall
       // placement (auto left-to-right run). withModule() points S at each module
       // so __render2d captures that module's rectangles.
-      if (typeof ensureRunLayout === 'function') ensureRunLayout();
+      // Every pre-existing key is kept exactly as it was; the wall designer's data
+      // (wall envelope, snap guides, issues, dimension chain) is added alongside.
+      ensureLayout();
+      var run = activeRun(), wall = ensureWall(run);
       var mods = [], boxes = [], maxX = 1, maxY = 1, maxD = 1;
       JOB.modules.forEach(function (m, i) {
         withModule(m, function () {
           var r2 = __render2d();
-          var p = m.placement || { offsetX: 0, baseHeight: 0 };
-          mods.push({ name: m.name || ('Module ' + (i + 1)), offsetX: p.offsetX, baseHeight: p.baseHeight, cab: r2.cab, rects: r2.rects });
+          var p = modPlace(m);
+          mods.push({ id: m.id, index: i, name: m.name || ('Module ' + (i + 1)),
+                      type: m.type || 'custom', runId: p.runId, hidden: !!m.roomHidden,
+                      offsetX: p.offsetX, baseHeight: p.baseHeight, cab: r2.cab, rects: r2.rects });
           // 3D boxes translated onto the wall (offsetX along X, baseHeight up Y).
           try {
             var bs = buildBoxes();
             for (var bi = 0; bi < bs.length; bi++) {
               var b = bs[bi];
-              boxes.push({ x0: b.x0 + p.offsetX, x1: b.x1 + p.offsetX, y0: b.y0 + p.baseHeight, y1: b.y1 + p.baseHeight, z0: b.z0, z1: b.z1, base: b.base, id: i + ':' + b.id, alpha: b.alpha });
+              boxes.push({ x0: b.x0 + p.offsetX, x1: b.x1 + p.offsetX, y0: b.y0 + p.baseHeight, y1: b.y1 + p.baseHeight, z0: b.z0, z1: b.z1, base: b.base, id: i + ':' + b.id, mid: m.id, alpha: b.alpha });
             }
           } catch (e) {}
           maxX = Math.max(maxX, p.offsetX + m.cab.w);
@@ -162,15 +172,102 @@ function loadEngine(appSrc) {
           maxD = Math.max(maxD, m.cab.d || 560);
         });
       });
-      return { room: { w: maxX, h: maxY, d: maxD }, modules: mods, boxes: boxes };
+      // Unit types, pre-sized, so the client's palette needs no geometry knowledge.
+      var types = {};
+      for (var tk in MODULE_TYPES) {
+        if (!Object.prototype.hasOwnProperty.call(MODULE_TYPES, tk) || tk === 'custom') continue;
+        var td = MODULE_TYPES[tk], ps = td.preset ? PRESETS[td.preset] : null;
+        types[tk] = { key: tk, label: td.label, hint: td.hint, baseHeight: td.baseHeight,
+                      w: ps ? ps.w : null, h: ps ? ps.h : null, d: ps ? ps.d : null };
+      }
+      return { room: { w: maxX, h: maxY, d: maxD }, modules: mods, boxes: boxes,
+               wall: { id: run.id, name: run.name, w: wall.w, h: wall.h, d: wall.d },
+               guides: wallGuides(run.id), issues: wallIssues(run.id),
+               dimChain: wallDimChain(run.id), types: types,
+               unit: (JOB.settings && JOB.settings.unit) || (S && S.unit) || 'mm' };
     }
-    ;function __edit(design, op, args, scope) {
+    ;function __edit(design, op, args, scope, opts) {
       // Apply one edit intent server-side (the real engine mutates the active
       // module) then return the updated design document + fresh render model.
       applyJob(design); args = args || {};
       switch (op) {
         case 'patch':          __deepMerge(S, args.patch || {}); if (typeof clampAllComps === 'function') clampAllComps(); break;
-        case 'add_module':     { var nm = args.name || ('Module ' + (JOB.modules.length + 1)); JOB.modules.push(hydrateModule({ name: nm })); JOB.active = JOB.modules.length - 1; JOB._mseq = (JOB._mseq || 0) + 1; break; }
+        case 'add_module': {
+          // args: {name?, code?, type?: 'base'|'wall'|'tall', offsetX?, baseHeight?, tol?}
+          // A bare {name} behaves exactly as before. With a type, the unit arrives
+          // already sized, already at the right height and already parked in the first
+          // free stretch of wall — the "zero typing" path for the palette.
+          var ty = MODULE_TYPES[args.type] && args.type !== 'custom' ? args.type : null;
+          var nm = args.name || (ty ? MODULE_TYPES[ty].label + ' ' + (JOB.modules.length + 1)
+                                    : 'Module ' + (JOB.modules.length + 1));
+          var nmod = hydrateModule({ name: nm, type: ty || 'custom' });
+          if (args.code) nmod.code = args.code;
+          JOB.modules.push(nmod);
+          JOB.active = JOB.modules.length - 1;
+          JOB._mseq = (JOB._mseq || 0) + 1;
+          S = JOB.modules[JOB.active];        // aiApplyPreset writes through S — must point at the NEW module
+          ensureLayout();                     // gives it an id + runId + a provisional offsetX
+          if (ty) {
+            if (MODULE_TYPES[ty].preset) aiApplyPreset(MODULE_TYPES[ty].preset);
+            nmod.placement.baseHeight = MODULE_TYPES[ty].baseHeight;
+          }
+          if (args.baseHeight != null) nmod.placement.baseHeight = Math.max(0, Math.round(+args.baseHeight));
+          if (args.offsetX != null) {
+            var sp = snapPlacement(nmod, +args.offsetX, nmod.placement.baseHeight, args.tol);
+            nmod.placement.offsetX = sp.offsetX; nmod.placement.baseHeight = sp.baseHeight;
+          } else {
+            var slots = wallFreeSlots(nmod.placement.runId, nmod.placement.baseHeight, nmod.cab.h, nmod.id);
+            var slot = null;
+            for (var si = 0; si < slots.length; si++) if (slots[si].mm >= nmod.cab.w) { slot = slots[si]; break; }
+            nmod.placement.offsetX = slot ? slot.x0 : roomBBox().w;
+          }
+          break;
+        }
+        case 'place_module': {
+          // args: {id?|index?, offsetX, baseHeight, runId?, snap? (default true), tol?, pinned?}
+          var pm = args.id != null ? __findModule(args.id) : JOB.modules[args.index];
+          if (pm) {
+            var pp = modPlace(pm);
+            if (args.runId) pp.runId = args.runId;
+            var pl = (args.snap === false)
+              ? { offsetX: +args.offsetX || 0, baseHeight: +args.baseHeight || 0 }
+              : snapPlacement(pm, args.offsetX, args.baseHeight, args.tol);
+            pp.offsetX = Math.round(pl.offsetX);
+            pp.baseHeight = Math.max(0, Math.round(pl.baseHeight));
+            if (args.pinned != null) pp.pinned = !!args.pinned;
+          }
+          break;
+        }
+        case 'set_wall': {
+          // args: {runId?, w?, h?, d?, name?} — the wall the units stand against.
+          var wrun = findRun(args.runId);
+          if (wrun) {
+            ensureWall(wrun);
+            if (args.w != null) wrun.wall.w = Math.max(300, Math.round(+args.w));
+            if (args.h != null) wrun.wall.h = Math.max(300, Math.round(+args.h));
+            if (args.d != null) wrun.wall.d = Math.max(100, Math.round(+args.d));
+            if (args.name) wrun.name = String(args.name);
+          }
+          break;
+        }
+        case 'set_module_type': {
+          // args: {id, type, moveToDefaultHeight? (default true)}
+          var tm = __findModule(args.id) || JOB.modules[JOB.active];
+          if (tm && MODULE_TYPES[args.type]) {
+            if (MODULE_TYPES[args.type].preset) withModule(tm, function () { aiApplyPreset(MODULE_TYPES[args.type].preset); });
+            tm.type = args.type;
+            if (args.moveToDefaultHeight !== false) modPlace(tm).baseHeight = MODULE_TYPES[args.type].baseHeight;
+          }
+          break;
+        }
+        case 'set_module_visible': {
+          // No id = every unit on the wall (the All / None buttons).
+          if (args.id == null) { JOB.modules.forEach(function (x) { x.roomHidden = !args.visible; }); break; }
+          var vm = __findModule(args.id);
+          if (vm) vm.roomHidden = !args.visible;
+          break;
+        }
+        case 'tidy_wall':      tidyRun(findRun(args.runId).id, args.mode || 'pack'); break;
         case 'delete_module':  {
           var di = args.index;
           if (di >= 0 && di < JOB.modules.length) {
@@ -183,7 +280,7 @@ function loadEngine(appSrc) {
         case 'set_dimensions': aiSetDimensions(args); break;
         case 'apply_preset':   aiApplyPreset(args.name); break;
         case 'set_doors':      aiSetDoors(args.count, args.reveal); break;
-        case 'add_shelves':    aiAddShelves(args.count); break;
+        case 'add_shelves':    aiAddShelves(args.count, null, null, !!args.dual); break;
         case 'add_verticals':  aiAddVerticals(args.count, null, null, !!args.dual); break;
         case 'add_comp': {
           // Insert a component into the clicked cell (real addComp: cell-bounded). args.dual (verticals
@@ -240,7 +337,7 @@ function loadEngine(appSrc) {
             __deepMerge(xc, args.patch || {});
             // Ticking "Dual panel" is a request for separate boxes: the divider runs the full interior height
             // so it actually splits the carcass (each box then gets its own top, bottom and back).
-            if (typeof seatDualFullHeight === 'function') seatDualFullHeight(xc);
+            if (typeof seatDualFull === 'function') seatDualFull(xc);
             if (typeof clampComp === 'function') clampComp(xc);
             if (xc.type === 'drawer' && typeof syncDrawerFlanks === 'function') syncDrawerFlanks(xc);
           }
@@ -252,9 +349,15 @@ function loadEngine(appSrc) {
       // drawer's linked flanks (side panels) — matches what every prototype setup
       // handler does. Without this, moving/deleting a shelf shifts a drawer's cell but
       // leaves its flank verticals behind. Skip for pure module-structure ops.
-      if (['add_module', 'delete_module', 'rename_module'].indexOf(op) < 0 && typeof resyncComponents === 'function') resyncComponents();
+      // Wall-layout ops move whole cabinets around; they never touch a cabinet's insides.
+      if (['add_module', 'delete_module', 'rename_module', 'place_module', 'set_wall',
+           'set_module_type', 'set_module_visible', 'tidy_wall'].indexOf(op) < 0
+          && typeof resyncComponents === 'function') resyncComponents();
       var d = JSON.parse(JSON.stringify(JOB));
-      return { design: d, model: __compute(d, { scope: scope, render: true }) };
+      // Defaults reproduce the original behaviour exactly (render on, room off). The
+      // Wall tab asks for room:true so one round trip refreshes the wall AND the cut list.
+      return { design: d, model: __compute(d, { scope: scope,
+        render: !opts || opts.render !== false, room: !!(opts && opts.room) }) };
     }
     ;function __compute(design, opts) {
       opts = opts || {};
@@ -266,6 +369,8 @@ function loadEngine(appSrc) {
           sheets: { SW: S.sheet.w, SH: S.sheet.h, utilisation: 0, sheets: [] },
           bom: { currency: opts.currency || 'GBP', lines: [], total: 0, assumptions: {} } };
         if (opts.render) { empty.module2d = { cab: { w: 0, h: 0, d: 0, t: 0 }, rects: [], labels: [], openings: [] }; empty.module3d = { boxes: [] }; }
+        // An empty job still gets a wall — the user needs somewhere to drop the first unit.
+        if (opts.room) { try { empty.room = __renderRoom(); } catch (e) {} }
         return empty;
       }
       var scope = opts.scope === 'job' ? 'job' : 'module';
@@ -279,6 +384,8 @@ function loadEngine(appSrc) {
         return { partNo: i + 1, module: job ? (p.mname || '—') : activeName,
                  name: p.name, qty: p.qty, w: p.w, h: p.h, d: p.d, thick: p.thick,
                  length: p.length, width: p.width, key: p.key, srcId: (p.srcId != null ? p.srcId : null),
+                 // Every panel this row covers, so clicking any of them finds it (srcId is just the first).
+                 srcIds: (p.srcIds && p.srcIds.length ? p.srcIds : (p.srcId != null ? [p.srcId] : [])),
                  band: p.band || '—', tapeLen: p.tapeLen || 0,
                  // Panel colour / decor code — the board this part is cut from. '' when none is set.
                  colour: p.colour || '' };

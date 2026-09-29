@@ -105,7 +105,6 @@
   [dcv, rcv, scv].forEach((c) => c && c.addEventListener('contextmenu', (e) => e.preventDefault()));
   let roomModel = null, roomMode = '2d';
   const roomCam = { yaw: -0.6, pitch: 0.5, scale: 1, ox: 0, oy: 0, fit: true };
-  const roomHidden = new Set();   // module indices toggled off the wall
 
   function fit(cv, ctx) {
     const r = cv.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
@@ -384,65 +383,247 @@
     ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
   }
 
-  // ── Room / wall elevation (job scope) ──
+  // ── Wall designer (job scope) ─────────────────────────────────────────────
+  // The wall is where every cabinet in the job is laid out together. The engine
+  // owns all of the geometry: it sends the wall envelope, each module's rects at
+  // its placement, the snap guides, the problems and the dimension chain. This
+  // file only paints them and measures a drag against the guides.
   async function loadRoom() {
     if (!design) { roomModel = null; drawRoom(); return; }
-    try { const r = await api('POST', `/${T()}/engine/compute`, { design: Object.assign({}, design, { active }), room: true }); roomModel = r.room; }
-    catch (e) { return toast(e.message, true); }
-    renderRoomModuleList(); drawRoom();
+    try {
+      const r = await api('POST', `/${T()}/engine/compute`,
+        { design: Object.assign({}, design, { active }), scope: 'job', room: true, render: false });
+      roomModel = r.room || null;
+    } catch (e) { return toast(e.message, true); }
+    afterRoomModel();
   }
+  // Everything that must follow a fresh room model, whether it came from a
+  // compute or piggy-backed on an edit.
+  function afterRoomModel() { renderWallPalette(); renderRoomModuleList(); renderWallIssues(); drawRoom(); }
+
+  // Wall-tab units come from the model, so the chain still reads correctly when no
+  // module is active. curUnit() stays untouched for the Design tab.
+  const wallUnit = () => (roomModel && roomModel.unit) || 'mm';
+  const fmtW = (mm) => wallUnit() === 'in' ? (mm / MM_PER_IN).toFixed(3) : fmt(mm);
+  const hiddenIds = () => new Set((roomModel && roomModel.modules || []).filter((m) => m.hidden).map((m) => m.id));
+
   function drawRoom() { if (roomMode === '3d') drawRoom3D(); else drawRoomElevation(); }
   function drawRoom3D() {
     const box = fit(rcv, rctx); rctx.clearRect(0, 0, box.w, box.h);
     if (!roomModel || !roomModel.boxes || !roomModel.boxes.length) return;
-    const boxes = roomModel.boxes.filter((b) => !roomHidden.has(parseInt(b.id, 10)));   // drop hidden modules
+    const hid = hiddenIds();
+    const boxes = roomModel.boxes.filter((b) => !hid.has(b.mid));
     if (!boxes.length) return;
-    const R = roomModel.room;
-    paint3D(rctx, box.w, box.h, boxes, [R.w / 2, R.h / 2, (R.d || 560) / 2], roomCam, { explode: 0, selId: null, dims: null });
+    const W = roomModel.wall || roomModel.room;
+    paint3D(rctx, box.w, box.h, boxes, [W.w / 2, W.h / 2, (W.d || 560) / 2], roomCam, { explode: 0, selId: null, dims: null });
   }
-  // Floating "modules on wall" list — tick to show/hide each on the wall.
+  // Floating "units on this wall" list — tick to show/hide, or jump straight in.
   function renderRoomModuleList() {
-    const list = $('#rm-list'); if (!list || !roomModel) return;
-    list.innerHTML = roomModel.modules.map((m, i) => `<label class="rm-item"><input type="checkbox" data-mi="${i}"${roomHidden.has(i) ? '' : ' checked'}> ${esc(m.name)}</label>`).join('');
-    list.querySelectorAll('input[data-mi]').forEach((cb) => cb.onchange = () => { const i = +cb.dataset.mi; if (cb.checked) roomHidden.delete(i); else roomHidden.add(i); drawRoom(); });
+    const list = $('#rm-list'); if (!list) return;
+    const mods = (roomModel && roomModel.modules) || [];
+    list.innerHTML = mods.length
+      ? mods.map((m) => `<label class="rm-item"><input type="checkbox" data-mid="${esc(m.id)}"${m.hidden ? '' : ' checked'}>` +
+          `<span class="rm-name">${esc(m.name)}</span><button class="rm-edit" data-open="${esc(m.id)}" type="button" title="Open this unit">Edit</button></label>`).join('')
+      : '<p class="rm-none">Nothing on this wall yet.</p>';
+    list.querySelectorAll('input[data-mid]').forEach((cb) => cb.onchange = () =>
+      editIntent('set_module_visible', { id: cb.dataset.mid, visible: cb.checked }));
+    list.querySelectorAll('.rm-edit').forEach((b) => b.onclick = (e) => { e.preventDefault(); openModule(b.dataset.open); });
   }
-  let roomView = null, roomDrag = null;   // roomView = live elevation transform; roomDrag = module being dragged
+
+  // Plain-language problem list under the canvas (overlaps, gaps, off-the-wall).
+  function renderWallIssues() {
+    const el = $('#wall-issues'); if (!el) return;
+    const issues = (roomModel && roomModel.issues) || [];
+    const shown = issues.filter((i) => i.severity !== 'info').slice(0, 4);
+    el.innerHTML = shown.map((i) => `<p class="wi ${i.severity}">${esc(i.message)}</p>`).join('');
+    el.classList.toggle('hidden', tab !== 'room' || !shown.length);
+  }
+
+  // Frame the canvas to the WALL, never to the units — so the view holds still
+  // while a cabinet is dragged around instead of rescaling under the cursor.
+  let roomView = null, wallDrag = null, wallPlacing = null, showWallDims = true;
+  function wallView(box) {
+    const W = roomModel && roomModel.wall; if (!W) return null;
+    const padX = 48, padTop = 30, padBottom = 76;   // room under the wall for the dimension chain
+    const s = Math.min((box.w - padX * 2) / (W.w || 1), (box.h - padTop - padBottom) / (W.h || 1));
+    const ox = (box.w - W.w * s) / 2;
+    const floorY = padTop + W.h * s;
+    return { ox, s, floorY, w: W.w, h: W.h,
+             sx: (mm) => ox + mm * s, sy: (mm) => floorY - mm * s };
+  }
+
+  // Nearest-guide snap for the unit being dragged. Pure arithmetic over the
+  // guides the engine sent — no geometry rules live here, and the engine re-runs
+  // the same snap on commit so the released position matches this ghost exactly.
+  const wallSnapTol = () => (roomView && roomView.s ? 12 / roomView.s : 12);   // 12 screen px, like the shelf drag
+  function snapWallGhost(size, id, rawX, rawY, free) {
+    const tol = wallSnapTol();
+    let bx = { pos: rawX, d: tol, g: null }, by = { pos: rawY, d: tol, g: null };
+    if (!free) for (const g of ((roomModel && roomModel.guides) || [])) {
+      if (g.sourceId && g.sourceId === id) continue;
+      const len = g.axis === 'x' ? size.w : size.h;
+      const pos = g.align === 'max' ? g.at - len : g.align === 'center' ? g.at - len / 2 : g.at;
+      const t = g.axis === 'x' ? bx : by, d = Math.abs(pos - (g.axis === 'x' ? rawX : rawY));
+      if (d < t.d) { t.d = d; t.pos = pos; t.g = g; }
+    }
+    return { offsetX: Math.round(bx.pos), baseHeight: Math.max(0, Math.round(by.pos)), gx: bx.g, gy: by.g };
+  }
+
   function drawRoomElevation() {
     const box = fit(rcv, rctx); rctx.clearRect(0, 0, box.w, box.h);
-    if (!roomModel || !roomModel.modules.length) { roomView = null; return; }
-    // Bounding box from visible modules only.
-    let rw = 1, rh = 1, anyVis = false;
-    roomModel.modules.forEach((m, i) => { if (roomHidden.has(i)) return; anyVis = true; rw = Math.max(rw, m.offsetX + m.cab.w); rh = Math.max(rh, m.baseHeight + m.cab.h); });
-    if (!anyVis) { roomView = null; return; }
-    const s = Math.min((box.w - 60) / (rw || 1), (box.h - 80) / (rh || 1)) * 0.98;
-    const ox = (box.w - rw * s) / 2, floorY = box.h - (box.h - rh * s) / 2;   // floor at bottom, modules stand up
-    roomView = { ox, s, floorY };
-    rctx.strokeStyle = 'rgba(174,183,198,0.35)'; rctx.lineWidth = 1;
-    rctx.beginPath(); rctx.moveTo(ox - 20, floorY + 0.5); rctx.lineTo(ox + rw * s + 20, floorY + 0.5); rctx.stroke();
-    roomModel.modules.forEach((m, i) => {
-      if (roomHidden.has(i)) return;
-      const dx = (roomDrag && roomDrag.index === i) ? roomDrag.dxMM : 0, dy = (roomDrag && roomDrag.index === i) ? roomDrag.dyMM : 0;
-      const bx = m.offsetX + dx, by = m.baseHeight + dy;
+    const V = roomView = wallView(box);
+    if (!V) return;
+    const mods = (roomModel.modules || []).filter((m) => !m.hidden);
+
+    // The wall itself: face, floor line, ceiling line.
+    rctx.fillStyle = 'rgba(255,255,255,0.03)';
+    rctx.fillRect(V.sx(0), V.sy(V.h), V.w * V.s, V.h * V.s);
+    rctx.strokeStyle = 'rgba(174,183,198,0.28)'; rctx.lineWidth = 1;
+    rctx.strokeRect(V.sx(0) + 0.5, V.sy(V.h) + 0.5, V.w * V.s - 1, V.h * V.s - 1);
+    rctx.strokeStyle = 'rgba(174,183,198,0.55)'; rctx.lineWidth = 2;
+    rctx.beginPath(); rctx.moveTo(V.sx(0) - 24, V.floorY); rctx.lineTo(V.sx(V.w) + 24, V.floorY); rctx.stroke();
+
+    if (!mods.length && !wallPlacing) {
+      rctx.fillStyle = '#8a97a8'; rctx.font = '600 14px system-ui'; rctx.textAlign = 'center';
+      rctx.fillText('This wall is empty — pick a unit on the left and it will drop into place.', box.w / 2, V.sy(V.h / 2));
+      rctx.textAlign = 'left';
+      drawWallSizeLabel(V);
+      return;
+    }
+
+    // Problem shading sits UNDER the units so it never hides the drawing.
+    drawIssues(V);
+
+    for (const m of mods) {
+      const drag = wallDrag && wallDrag.id === m.id ? wallDrag.ghost : null;
+      const bx = drag ? drag.offsetX : m.offsetX, by = drag ? drag.baseHeight : m.baseHeight;
+      if (drag) rctx.globalAlpha = 0.85;
       for (const rc of m.rects) {
-        const X = ox + (bx + rc.x0) * s, Y = floorY - (by + rc.y1) * s, w = (rc.x1 - rc.x0) * s, h = (rc.y1 - rc.y0) * s;
+        const X = V.sx(bx + rc.x0), Y = V.sy(by + rc.y1), w = (rc.x1 - rc.x0) * V.s, h = (rc.y1 - rc.y0) * V.s;
         if (rc.fill) { rctx.fillStyle = rc.fill; rctx.fillRect(X, Y, w, h); }
         if (rc.stroke) { rctx.strokeStyle = rc.stroke; rctx.lineWidth = 1; rctx.strokeRect(X + 0.5, Y + 0.5, w - 1, h - 1); }
       }
+      rctx.globalAlpha = 1;
+      // Name plate on the unit's own baseline, so wall units are labelled too.
       rctx.fillStyle = '#aeb7c6'; rctx.font = '600 11px system-ui'; rctx.textAlign = 'center'; rctx.textBaseline = 'top';
-      rctx.fillText(`${m.name} · ${fmtU(m.cab.w)}`, ox + (bx + m.cab.w / 2) * s, floorY + 6);
-    });
-    rctx.textBaseline = 'alphabetic';
+      rctx.fillText(m.name, V.sx(bx + m.cab.w / 2), V.sy(by) + 4);
+      rctx.textBaseline = 'alphabetic'; rctx.textAlign = 'left';
+    }
+
+    if (wallPlacing && wallPlacing.ghost) drawPlacingGhost(V);
+    drawGuides(V);
+    if (showWallDims) drawDimChain(V);
+    drawWallSizeLabel(V);
   }
+
+  function drawWallSizeLabel(V) {
+    rctx.fillStyle = '#6b7686'; rctx.font = '600 11px system-ui'; rctx.textAlign = 'right';
+    rctx.fillText(`Wall ${fmtW(V.w)} × ${fmtW(V.h)} ${wallUnit()}`, V.sx(V.w), V.sy(V.h) - 8);
+    rctx.textAlign = 'left';
+  }
+
+  // The unit being dragged in from the palette, before it exists.
+  function drawPlacingGhost(V) {
+    const p = wallPlacing, g = p.ghost;
+    rctx.save();
+    rctx.globalAlpha = 0.6; rctx.fillStyle = 'rgba(190,160,105,0.35)';
+    rctx.fillRect(V.sx(g.offsetX), V.sy(g.baseHeight + p.h), p.w * V.s, p.h * V.s);
+    rctx.globalAlpha = 1; rctx.strokeStyle = '#d9c08a'; rctx.lineWidth = 1.5; rctx.setLineDash([5, 4]);
+    rctx.strokeRect(V.sx(g.offsetX) + 0.5, V.sy(g.baseHeight + p.h) + 0.5, p.w * V.s - 1, p.h * V.s - 1);
+    rctx.restore();
+  }
+
+  // Only the guides the drag is actually latched onto — a wall of dashed lines
+  // would be noise, one amber line with a name is a explanation.
+  function drawGuides(V) {
+    const src = wallDrag || wallPlacing; if (!src || !src.ghost) return;
+    const hits = [src.ghost.gx, src.ghost.gy].filter(Boolean);
+    rctx.save(); rctx.setLineDash([6, 5]); rctx.strokeStyle = '#e0b661'; rctx.lineWidth = 1.2;
+    for (const g of hits) {
+      rctx.beginPath();
+      if (g.axis === 'x') { rctx.moveTo(V.sx(g.at), V.sy(V.h) - 10); rctx.lineTo(V.sx(g.at), V.floorY + 10); }
+      else { rctx.moveTo(V.sx(0) - 10, V.sy(g.at)); rctx.lineTo(V.sx(V.w) + 10, V.sy(g.at)); }
+      rctx.stroke();
+    }
+    rctx.setLineDash([]);
+    if (hits.length) {
+      const g = hits[0], x = g.axis === 'x' ? V.sx(g.at) : V.sx(V.w / 2), y = g.axis === 'x' ? V.sy(V.h) - 18 : V.sy(g.at) - 10;
+      dimLabel(rctx, g.label, x, y, false, 'rgba(24,28,34,0.92)', '#e0b661');
+    }
+    rctx.restore();
+  }
+
+  // Red band exactly over the clash. Gaps are not shaded — they already read as an
+  // amber segment in the dimension chain and a sentence in the banner, and shading
+  // empty wall would bury the drawing under colour.
+  function drawIssues(V) {
+    for (const i of ((roomModel && roomModel.issues) || [])) {
+      if (i.kind !== 'overlap') continue;
+      const w = (i.x1 - i.x0) * V.s, h = (i.y1 - i.y0) * V.s;
+      rctx.fillStyle = 'rgba(224,90,90,0.30)';
+      rctx.fillRect(V.sx(i.x0), V.sy(i.y1), w, h);
+      rctx.strokeStyle = 'rgba(224,90,90,0.85)'; rctx.lineWidth = 1.5;
+      rctx.strokeRect(V.sx(i.x0) + 0.5, V.sy(i.y1) + 0.5, w - 1, h - 1);
+    }
+  }
+
+  // A running chain per height band: every unit width, every gap, then the total.
+  // This is the drawing a fitter actually reads off the wall.
+  function drawDimChain(V) {
+    const chain = roomModel && roomModel.dimChain; if (!chain || !chain.rows.length) return;
+    for (const row of chain.rows) {
+      const y = V.sy(row.y) + 22;
+      for (const s of row.segments) {
+        const xL = V.sx(s.x0), xR = V.sx(s.x1);
+        if (xR - xL < 12) continue;
+        const gap = s.kind === 'gap';
+        rctx.strokeStyle = gap ? '#e0b661' : DIMCOL; rctx.lineWidth = 1;
+        rctx.beginPath(); rctx.moveTo(xL + 1, y); rctx.lineTo(xR - 1, y); rctx.stroke();
+        rctx.beginPath(); rctx.moveTo(xL + 0.5, y - 4); rctx.lineTo(xL + 0.5, y + 4);
+        rctx.moveTo(xR - 0.5, y - 4); rctx.lineTo(xR - 0.5, y + 4); rctx.stroke();
+        if (xR - xL > 34) dimLabel(rctx, fmtW(s.mm), (xL + xR) / 2, y, false, 'rgba(24,28,34,0.92)', gap ? '#e0b661' : '#ffffff');
+      }
+      // Overall run under the floor row only — one total, not one per band.
+      if (row.kind === 'floor') {
+        const ty = y + 24, x0 = V.sx(0), x1 = V.sx(V.w);
+        rctx.strokeStyle = DIMCOL; rctx.lineWidth = 1;
+        rctx.beginPath(); rctx.moveTo(x0, ty); rctx.lineTo(x1, ty); rctx.stroke();
+        arrowH(rctx, x0, ty, 1); arrowH(rctx, x1, ty, -1);
+        dimLabel(rctx, `Total ${fmtW(chain.wallW)} ${wallUnit()}`, (x0 + x1) / 2, ty, false, 'rgba(24,28,34,0.92)');
+      }
+    }
+  }
+
+  // Topmost visible unit under the pointer, as a record (never an index — indices
+  // shift when a module is deleted, ids do not).
   function roomHitModule(clientX, clientY) {
-    if (!roomView || !roomModel) return -1;
+    if (!roomView || !roomModel) return null;
     const r = rcv.getBoundingClientRect(), { ox, s, floorY } = roomView;
     const xm = (clientX - r.left - ox) / s, ym = (floorY - (clientY - r.top)) / s;
-    for (let i = roomModel.modules.length - 1; i >= 0; i--) {
-      if (roomHidden.has(i)) continue;
-      const m = roomModel.modules[i];
-      if (xm >= m.offsetX && xm <= m.offsetX + m.cab.w && ym >= m.baseHeight && ym <= m.baseHeight + m.cab.h) return i;
+    const mods = roomModel.modules || [];
+    for (let i = mods.length - 1; i >= 0; i--) {
+      const m = mods[i];
+      if (m.hidden) continue;
+      if (xm >= m.offsetX && xm <= m.offsetX + m.cab.w && ym >= m.baseHeight && ym <= m.baseHeight + m.cab.h) return m;
     }
-    return -1;
+    return null;
+  }
+  // Pointer position on the wall, in mm.
+  function roomPointMM(clientX, clientY) {
+    if (!roomView) return null;
+    const r = rcv.getBoundingClientRect(), { ox, s, floorY } = roomView;
+    return { x: (clientX - r.left - ox) / s, y: (floorY - (clientY - r.top)) / s };
+  }
+
+  // Drill in: open one unit in the Design tab for detailed work.
+  function openModule(id) {
+    const i = (design && design.modules || []).findIndex((m) => m.id === id);
+    if (i < 0) return;
+    active = i; clearSelection();
+    renderModuleBar(); populateSetup();
+    const wasModule = scope === 'module';
+    showTab('design');
+    if (wasModule) recompute();   // setScope is a no-op when the scope already matched
   }
 
   // ── Cut list + summary (right panel) ──
@@ -450,8 +631,11 @@
     const tb = $('#cutlist tbody');
     tb.innerHTML = (model.cutList || []).map((p) => {
       const src = p.srcId != null ? String(p.srcId) : '';
-      const selCls = src !== '' && src === String(selectedId) ? ' class="cl-selected"' : '';
-      return `<tr data-src="${esc(src)}"${selCls}><td>${p.partNo != null ? p.partNo : ''}</td><td>${esc(p.name)}</td><td>${esc(p.module || '')}</td><td>${esc(p.colour || '—')}</td><td>${p.qty}</td><td>${fmtU(p.w)}</td><td>${fmtU(p.h)}</td><td>${fmtU(p.d)}</td><td>${fmtU(p.thick)}</td><td>${esc(p.band)}</td></tr>`;
+      // Identical panels merge into one row, so a row stands for SEVERAL panels. Track them all, or
+      // selecting the right-hand side (or box 3's top) would highlight nothing.
+      const all = rowIds(p);
+      const selCls = selectedId != null && all.indexOf(String(selectedId)) >= 0 ? ' class="cl-selected"' : '';
+      return `<tr data-src="${esc(src)}" data-all="${esc(all.join(" "))}"${selCls}><td>${p.partNo != null ? p.partNo : ''}</td><td>${esc(p.name)}</td><td>${esc(p.module || '')}</td><td>${esc(p.colour || '—')}</td><td>${p.qty}</td><td>${fmtU(p.w)}</td><td>${fmtU(p.h)}</td><td>${fmtU(p.d)}</td><td>${fmtU(p.thick)}</td><td>${esc(p.band)}</td></tr>`;
     }).join('');
     const t = model.totals || {}, sh = model.sheets || {};
     $('#cutlist-summary').innerHTML =
@@ -854,21 +1038,26 @@
   async function recompute() {
     if (!design) return;
     // Point the design at the active module (server computes that one for module scope).
+    // On the Wall tab ask for the room too, so one trip refreshes wall AND cut list.
     const d = Object.assign({}, design, { active });
-    try { model = await api('POST', `/${T()}/engine/compute`, { design: d, scope, render: true }); }
+    const wantRoom = tab === 'room';
+    try { model = await api('POST', `/${T()}/engine/compute`, { design: d, scope, render: true, room: wantRoom }); }
     catch (e) { return toast(e.message, true); }
     cam2.fit = true; cam3.fit = true;
+    if (wantRoom && model.room) { roomModel = model.room; renderWallPalette(); renderRoomModuleList(); renderWallIssues(); }
     renderCutList(); redraw();
   }
 
   // Set the cut-list / sheet scope (module = this cabinet, job = whole job) and
   // reflect it in the toggle. Recomputes only when the scope actually changes.
+  // Returns true when it actually recomputed, so callers know whether the model
+  // (and with it the wall) has already been refreshed.
   function setScope(s) {
     const bm = $('#scope-module'), bj = $('#scope-job');
     if (bm) bm.classList.toggle('active', s === 'module');
     if (bj) bj.classList.toggle('active', s === 'job');
-    if (scope === s) return;
-    scope = s; recompute();
+    if (scope === s) return false;
+    scope = s; recompute(); return true;
   }
 
   // Edit intent: the server applies the op (real engine) and returns the updated
@@ -881,9 +1070,12 @@
     const d = Object.assign({}, design, { active });
     const prevActive = active;
     try {
-      const r = await api('POST', `/${T()}/engine/edit`, { design: d, op, args: args || {}, scope });
+      const wantRoom = tab === 'room';
+      const r = await api('POST', `/${T()}/engine/edit`, { design: d, op, args: args || {}, scope, room: wantRoom });
       design = r.design; model = r.model;
       if (design && design.active != null) active = design.active;   // module ops can change the active index
+      // The wall came back with the edit — no second round trip to redraw it.
+      if (wantRoom && model && model.room) { roomModel = model.room; renderWallPalette(); renderRoomModuleList(); renderWallIssues(); }
       renderModuleBar(); populateSetup(); renderCutList();
       if (active !== prevActive) {
         cam2.fit = true; cam3.fit = true; selectedId = null; const p = $('#card-selected'); if (p) p.classList.add('hidden'); redraw();
@@ -910,7 +1102,7 @@
     projId = null; projName = 'Untitled'; active = -1; model = null;
     $('#wv-proj').textContent = projName;
     renderModuleBar();   // renders "+ New" + toggles the no-modules empty states on
-    redraw();            // draw2D returns early (no model) — blank canvas
+    recompute();         // an empty job still gets a wall to drop the first unit onto
   }
 
   // ── Save (cloud projects) ──
@@ -962,15 +1154,23 @@
     if ($('#dims-wrap')) $('#dims-wrap').classList.toggle('hidden', !inDesign);
     if ($('#room-view-toggle')) $('#room-view-toggle').classList.toggle('hidden', name !== 'room');
     if ($('#room-modules')) $('#room-modules').classList.toggle('hidden', name !== 'room');
+    // Wall designer overlays follow the same pattern as the module list above.
+    const inWall = name === 'room';
+    if ($('#wall-palette')) $('#wall-palette').classList.toggle('hidden', !inWall);
+    if ($('#wall-size')) $('#wall-size').classList.toggle('hidden', !inWall);
+    if (!inWall && $('#wall-issues')) $('#wall-issues').classList.add('hidden');
     syncViewTools();
     // Scope follows context: Design works on one cabinet (module), Room spans every
     // module (whole job). Sheet/Setup are neutral — they KEEP the current scope, so
     // Sheet inherits it: Design→Sheet shows this module's sheets, Room→Sheet shows the
     // whole-job sheets. setScope recomputes only if the scope actually changes.
-    if (name === 'design') setScope('module');
-    else if (name === 'room') setScope('job');
+    let recomputed = false;
+    if (name === 'design') recomputed = setScope('module');
+    else if (name === 'room') recomputed = setScope('job');
     redraw();
-    if (name === 'room') loadRoom();
+    // recompute() already fetches the wall when the scope changed — only go and
+    // get it separately when it did not (e.g. arriving from the Sheet tab).
+    if (name === 'room' && !recomputed) loadRoom();
   }
   function syncViewTools() {
     const ew = $('#explode-wrap'); if (ew) ew.classList.toggle('hidden', !(tab === 'design' && mode === '3d'));
@@ -1012,15 +1212,20 @@
     return best;
   }
 
-  // Live position readout while dragging a shelf/vertical (call with null to hide).
-  function dragChip(e, mm) {
+  // The floating readout element, shared by the shelf drag and the wall drag.
+  function chipEl() {
     let n = document.getElementById('wv-drag-chip');
-    if (!e) { if (n) n.style.display = 'none'; return; }
     if (!n) {
       n = document.createElement('div'); n.id = 'wv-drag-chip';
       n.style.cssText = 'position:fixed;z-index:600;pointer-events:none;background:#101418;color:#fff;border:1px solid rgba(255,255,255,.22);border-radius:6px;padding:3px 8px;font:600 12px/1 system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.45)';
       document.body.appendChild(n);
     }
+    return n;
+  }
+  // Live position readout while dragging a shelf/vertical (call with null to hide).
+  function dragChip(e, mm) {
+    if (!e) { const h = document.getElementById('wv-drag-chip'); if (h) h.style.display = 'none'; return; }
+    const n = chipEl();
     n.textContent = (dragPart && dragPart.type === 'shelf' ? 'Height ' : 'Position ') + fmtU(mm) + ' ' + curUnit() + (dragPart && dragPart.aligned ? '  ·  aligned ✓' : '');
     n.style.left = (e.clientX + 14) + 'px'; n.style.top = (e.clientY + 16) + 'px'; n.style.display = 'block';
   }
@@ -1055,7 +1260,12 @@
     const col = m.colours || {};
     return ((col.parts || {})[key] || col.default || '') || 'inherit';
   };
-  const cutRowFor = (id) => (model.cutList || []).find((r) => String(r.srcId) === String(id)) || {};
+  // Every panel a cut-list row stands for. Identical panels merge into one row, so the row's own `srcId` is
+  // only the first of them — `srcIds` carries the rest (right-hand side, box 2's top, …).
+  const rowIds = (r) => ((r && r.srcIds && r.srcIds.length ? r.srcIds : (r && r.srcId != null ? [r.srcId] : [])).map(String));
+  // The row a panel belongs to — the source of the sizes shown in the selected-panel card, so it has to find
+  // the row for ANY panel, not just the one that happened to be listed first.
+  const cutRowFor = (id) => (model.cutList || []).find((r) => rowIds(r).indexOf(String(id)) >= 0) || {};
 
   function showSelection(id) {
     const panel = $('#card-selected');
@@ -1111,9 +1321,10 @@
         + selRow('depth', 'Depth (mm)', c.depth)
         + selRow('setback', 'Setback from back (mm)', c.setback || 0)
         // Dual panel = two boards face-to-face that split the cabinet into separate boxes. Ticking it takes
-        // the divider full height (the only span that can carry a top & bottom per box) and the cut list
-        // immediately resizes: 2 sides, its own top, bottom and back for each box.
-        + (isShelf ? '' : chkRow('dual', 'Dual panel (separate box)', !!c.dual));
+        // the part across the full interior (the only span that can carry a complete box) and the cut list
+        // immediately resizes: each box gets its own pair of sides, top, bottom and back. A shelf stacks the
+        // boxes one above the other; a vertical sets them side by side.
+        + chkRow('dual', isShelf ? 'Dual panel (stacked boxes)' : 'Dual panel (separate box)', !!c.dual);
     } else if (c.type === 'door') {
       html = nameRowComp(c.customName) + colRowC
         + optRow('count', 'Leaves', [[1, '1 door'], [2, '2 doors']], c.count || 1)
@@ -1143,17 +1354,21 @@
         + selRow('drawerSetup.caps.bottom.setback', 'Setback from rear', cap.setback);
     }
     $('#sel-fields').innerHTML = html;
-    $('#sel-derived').textContent = (c.type === 'vertical' && c.dual ? 'Dual panel — splits the cabinet into separate boxes, each with its own top, bottom & back · ' : '')
+    $('#sel-derived').textContent = (c.dual && (c.type === 'vertical' || c.type === 'shelf')
+        ? `Dual panel — splits the cabinet into ${c.type === 'shelf' ? 'stacked' : 'side-by-side'} boxes, each with its own sides, top, bottom & back · ` : '')
       + `${label} · id ${id}` + ((c.type === 'shelf' || c.type === 'vertical') ? ' · drag to move' : '');
     const su = $('#sel-update'); if (su) su.style.display = 'none';   // live edits apply on change
     panel.classList.remove('hidden');
     markCutRows(); redraw();
   }
   function clearSelection() { selectedId = null; const p = $('#card-selected'); if (p) p.classList.add('hidden'); markCutRows(); redraw(); }
-  // Cross-highlight: mark the cut-list rows whose part is the selected component.
+  // Cross-highlight: mark the cut-list row that covers the selected panel. Matches against every panel the
+  // row stands for, not just the first, so any side / cap / back of any box lights up its own row.
   function markCutRows() {
+    const sel = selectedId == null ? null : String(selectedId);
     document.querySelectorAll('#cutlist tbody tr[data-src]').forEach((tr) => {
-      tr.classList.toggle('cl-selected', tr.dataset.src !== '' && tr.dataset.src === String(selectedId));
+      const all = (tr.dataset.all || tr.dataset.src || '').split(' ').filter(Boolean);
+      tr.classList.toggle('cl-selected', sel != null && all.indexOf(sel) >= 0);
     });
   }
 
@@ -1327,39 +1542,124 @@
     const on2 = $('#rv-2d'), on3 = $('#rv-3d');
     if (on2) on2.onclick = () => { roomMode = '2d'; on2.classList.add('active'); if (on3) on3.classList.remove('active'); drawRoom(); };
     if (on3) on3.onclick = () => { roomMode = '3d'; roomCam.fit = true; on3.classList.add('active'); if (on2) on2.classList.remove('active'); drawRoom(); };
-    if ($('#rm-all')) $('#rm-all').onclick = () => { roomHidden.clear(); renderRoomModuleList(); drawRoom(); };
-    if ($('#rm-none')) $('#rm-none').onclick = () => { if (roomModel) roomModel.modules.forEach((m, i) => roomHidden.add(i)); renderRoomModuleList(); drawRoom(); };
+    if ($('#rm-all')) $('#rm-all').onclick = () => editIntent('set_module_visible', { visible: true });
+    if ($('#rm-none')) $('#rm-none').onclick = () => editIntent('set_module_visible', { visible: false });
     if ($('#rm-toggle')) $('#rm-toggle').onclick = () => { const rm = $('#room-modules'); if (rm) rm.classList.toggle('collapsed'); };
+    const dims = $('#rv-dims');
+    if (dims) dims.onclick = () => { showWallDims = !showWallDims; dims.classList.toggle('active', showWallDims); drawRoom(); };
+    if ($('#rv-tidy')) $('#rv-tidy').onclick = async () => {
+      await editIntent('tidy_wall', { mode: 'pack' });
+      toast('Units pushed together, no gaps.');
+    };
+    // Wall size: preset chips only — no numbers to type.
+    const wsz = $('#wall-size');
+    if (wsz) wsz.querySelectorAll('button[data-w],button[data-h]').forEach((b) => b.onclick = () => {
+      const a = {}; if (b.dataset.w) a.w = +b.dataset.w; if (b.dataset.h) a.h = +b.dataset.h;
+      editIntent('set_wall', a);
+    });
+    wireWallPalette();
+
     let rdrag = null;
+    const inWall2D = () => tab === 'room' && roomMode === '2d';
     rcv.addEventListener('mousedown', (e) => {
       if (roomMode === '3d') { rdrag = { x: e.clientX, y: e.clientY, o: { ...roomCam }, btn: e.button }; return; }
-      // Elevation: drag a module to arrange it on the wall.
-      const i = roomHitModule(e.clientX, e.clientY);
-      if (i >= 0) { const m = roomModel.modules[i]; roomDrag = { index: i, x: e.clientX, y: e.clientY, dxMM: 0, dyMM: 0, start: { offsetX: m.offsetX, baseHeight: m.baseHeight } }; }
+      const m = roomHitModule(e.clientX, e.clientY);
+      if (m) wallDrag = { id: m.id, size: { w: m.cab.w, h: m.cab.h }, x: e.clientX, y: e.clientY,
+                          start: { offsetX: m.offsetX, baseHeight: m.baseHeight }, ghost: null, moved: false };
+    });
+    // Double-click a unit to open it for detailed editing.
+    rcv.addEventListener('dblclick', (e) => {
+      if (!inWall2D()) return;
+      const m = roomHitModule(e.clientX, e.clientY);
+      if (m) { wallDrag = null; dragChip(null); openModule(m.id); }
     });
     window.addEventListener('mousemove', (e) => {
-      if (roomDrag && roomView) {
-        roomDrag.dxMM = (e.clientX - roomDrag.x) / roomView.s;
-        roomDrag.dyMM = -(e.clientY - roomDrag.y) / roomView.s;   // screen-down => lower on the wall
-        drawRoomElevation(); return;
+      // Placing a brand-new unit from the palette.
+      if (wallPlacing && inWall2D()) {
+        const p = roomPointMM(e.clientX, e.clientY);
+        if (p) {
+          wallPlacing.ghost = snapWallGhost({ w: wallPlacing.w, h: wallPlacing.h }, null,
+            p.x - wallPlacing.w / 2, wallPlacing.baseHeight, e.shiftKey);
+          if (e.shiftKey) wallPlacing.ghost.baseHeight = Math.max(0, Math.round(p.y - wallPlacing.h / 2));
+          wallChip(e, wallPlacing.ghost, wallPlacing.label);
+          drawRoomElevation();
+        }
+        return;
+      }
+      if (wallDrag && roomView && inWall2D()) {
+        const dx = (e.clientX - wallDrag.x) / roomView.s, dy = -(e.clientY - wallDrag.y) / roomView.s;
+        if (Math.abs(e.clientX - wallDrag.x) + Math.abs(e.clientY - wallDrag.y) > 2) wallDrag.moved = true;
+        // Snap locally against the engine's guides — no network until mouseup.
+        wallDrag.ghost = snapWallGhost(wallDrag.size, wallDrag.id,
+          wallDrag.start.offsetX + dx, wallDrag.start.baseHeight + dy, e.shiftKey);
+        if (wallDrag.moved) wallChip(e, wallDrag.ghost, null);
+        drawRoomElevation();
+        return;
       }
       if (!rdrag) return; const dx = e.clientX - rdrag.x, dy = e.clientY - rdrag.y;
       if (rdrag.btn === 0) { roomCam.yaw = rdrag.o.yaw + dx * 0.01; roomCam.pitch = Math.max(-1.4, Math.min(1.4, rdrag.o.pitch + dy * 0.01)); }
       else { roomCam.ox = rdrag.o.ox + dx; roomCam.oy = rdrag.o.oy + dy; }
       drawRoom3D();
     });
-    window.addEventListener('mouseup', () => {
-      if (roomDrag) {
-        let offsetX = Math.max(0, Math.round(roomDrag.start.offsetX + roomDrag.dxMM));
-        let baseHeight = Math.max(0, Math.round(roomDrag.start.baseHeight + roomDrag.dyMM));
-        if (baseHeight < 30) baseHeight = 0;   // snap to the floor
-        if (design && design.modules && design.modules[roomDrag.index]) design.modules[roomDrag.index].placement = { offsetX, baseHeight };
-        roomDrag = null; loadRoom();   // persist (data) + re-render the wall
+    window.addEventListener('mouseup', (e) => {
+      if (wallPlacing) {
+        const g = wallPlacing.ghost, t = wallPlacing.type;
+        const overCanvas = g && e.target === rcv;
+        const tol = wallSnapTol();
+        wallPlacing = null; dragChip(null);
+        // Dropped on the wall → place it there. Released anywhere else → let the
+        // engine park it in the first free stretch (the plain "click to add" path).
+        // The same tolerance goes with it so the engine's re-snap lands identically.
+        editIntent('add_module', overCanvas ? { type: t, offsetX: g.offsetX, baseHeight: g.baseHeight, tol } : { type: t });
+        return;
+      }
+      if (wallDrag) {
+        const d = wallDrag, tol = wallSnapTol(); wallDrag = null; dragChip(null);
+        // A drag that never moved is a click, not a placement.
+        if (d.moved && d.ghost) editIntent('place_module', { id: d.id, offsetX: d.ghost.offsetX, baseHeight: d.ghost.baseHeight, tol });
+        else drawRoomElevation();
         return;
       }
       rdrag = null;
     });
     rcv.addEventListener('wheel', (e) => { if (roomMode !== '3d') return; e.preventDefault(); roomCam.scale *= (e.deltaY < 0 ? 1.1 : 1 / 1.1); drawRoom3D(); }, { passive: false });
+  }
+
+  // Live readout while dragging on the wall: where it will land and what it
+  // latched onto — in words, not coordinates. Shares the chip element (and so the
+  // styling) with the shelf drag, but writes its own text.
+  function wallChip(e, ghost, prefix) {
+    const el = chipEl();
+    const snap = ghost && (ghost.gx || ghost.gy);
+    const where = snap ? snap.label : `${fmtW(ghost.offsetX)} ${wallUnit()} from the left`;
+    el.textContent = (prefix ? prefix + ' · ' : '') + (snap ? '↔ ' + where : where);
+    el.style.left = (e.clientX + 14) + 'px'; el.style.top = (e.clientY + 16) + 'px'; el.style.display = 'block';
+  }
+
+  // "Add to this wall" palette. Click to drop into the first free space, or drag
+  // onto the wall to choose the spot.
+  function wireWallPalette() {
+    const pal = $('#wall-palette'); if (!pal) return;
+    pal.querySelectorAll('.wp-item').forEach((b) => {
+      b.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        const t = (roomModel && roomModel.types && roomModel.types[b.dataset.type]) || null;
+        if (!t) return;
+        wallPlacing = { type: b.dataset.type, w: t.w, h: t.h, baseHeight: t.baseHeight, label: t.label, ghost: null };
+      });
+    });
+  }
+  // Fill the palette from the engine's type table, so sizes are never hard-coded here.
+  function renderWallPalette() {
+    const pal = $('#wall-palette'); if (!pal) return;
+    const types = (roomModel && roomModel.types) || null;
+    const body = pal.querySelector('.wp-body'); if (!body || !types) return;
+    body.innerHTML = Object.keys(types).map((k) => {
+      const t = types[k];
+      return `<button class="wp-item" data-type="${esc(k)}" type="button"><b>${esc(t.label)}</b>` +
+        `<span>${esc(t.hint)} · ${fmtW(t.w)} × ${fmtW(t.h)}</span></button>`;
+    }).join('');
+    wireWallPalette();
   }
 
   // ── Editing (stage 2): controls post intents to the server ──
@@ -1437,10 +1737,14 @@
     // clicked cell. Even distribution is what produces clean modular splits.
     const pt = () => lastClickMM;
     const divN = () => Math.max(1, Math.min(20, +(($('#in-div-count') || {}).value || 1)));
-    onClick('btn-add-shelf', () => { const n = divN(); n > 1 ? editIntent('add_shelves', { count: n }) : editIntent('add_comp', { type: 'shelf', point: pt() }); });
-    // "Dual" makes the vertical two boards face-to-face that SPLIT the carcass: each side of it becomes an
-    // independent box with its own top, bottom, back and pair of sides. With × N the engine spaces them for
-    // equal boxes (each opening = w/(N+1) − 2×thickness), not merely equal gaps.
+    // "Dual" makes the shelf two boards face-to-face that SPLIT the carcass into STACKED boxes: above and
+    // below it become independent boxes, each with its own pair of sides, top, bottom and back. With × N the
+    // engine spaces them for equal boxes (each opening = h/(N+1) − 2×thickness), not merely equal gaps.
+    onClick('btn-add-shelf', () => {
+      const n = divN(), dual = chkv('in-shelf-dual');
+      n > 1 ? editIntent('add_shelves', { count: n, dual }) : editIntent('add_comp', { type: 'shelf', point: pt(), dual });
+    });
+    // The same, turned 90°: a dual vertical splits the carcass side by side.
     onClick('btn-add-vertical', () => {
       const n = divN(), dual = chkv('in-vert-dual');
       n > 1 ? editIntent('add_verticals', { count: n, dual }) : editIntent('add_comp', { type: 'vertical', point: pt(), dual });
@@ -1515,10 +1819,11 @@
     // Brand from tenant config.
     try { const cfg = await api('GET', `/${T()}/config`); if (cfg.brand) { if (cfg.brand.accent) document.documentElement.style.setProperty('--accent', cfg.brand.accent); if (cfg.brand.name) { $('#brand-title').textContent = cfg.brand.name; document.title = cfg.brand.name + ' — Designer'; } } } catch {}
     $('#wv-ws').textContent = session.tenant;
-    wire(); showTab('design');
+    // Wall first: you lay out the whole run, then open a unit to detail it.
+    wire(); showTab('room');
     let list = [];
     try { list = (await api('GET', `/${T()}/projects`)).projects || []; } catch (e) { return toast(e.message, true); }
     if (list.length) openDesign(list[0].id, list[0].name);
-    else { startEmptyDesign(); toast('New design — click “+ New” to add a module.'); }
+    else { startEmptyDesign(); toast('New design — pick a unit on the left to start your wall.'); }
   })();
 })();
