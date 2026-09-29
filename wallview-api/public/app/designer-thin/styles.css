@@ -51,8 +51,10 @@ button.ghost { background: transparent; }
 button.full { width: 100%; margin-top: 8px; }
 
 .layout {
+  --cut-w: 300px;
+  --comp-w: 240px;
   display: grid;
-  grid-template-columns: 300px 1fr 240px;
+  grid-template-columns: var(--cut-w) minmax(0, 1fr) var(--comp-w);
   gap: 12px;
   padding: 12px;
   height: calc(100% - 53px);
@@ -166,7 +168,49 @@ body.no-modules .setup-empty { display: block; }
 
 /* Cut-list scope toggle (Module ⇄ Job) */
 .cut-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.cut-head h2 { margin: 0 0 10px; }
+.cut-head h2 { margin: 0 0 10px; margin-right: auto; }
+.cut-head .rb-collapse { order: 2; margin-bottom: 10px; }
+
+/* Collapsible side panels. Collapsed (the default) = a 48px icon ribbon; the
+   ribbon's action icons click the real panel buttons. */
+body.cutlist-collapsed .layout { --cut-w: 48px; }
+body.components-collapsed .layout { --comp-w: 48px; }
+.ribbon { display: none; }
+body.cutlist-collapsed #panel-cutlist > .card,
+body.components-collapsed #panel-components > .card { display: none; }
+body.cutlist-collapsed #panel-cutlist > .ribbon,
+body.components-collapsed #panel-components > .ribbon { display: flex; }
+.ribbon {
+  flex: 1; flex-direction: column; align-items: center; gap: 4px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 0; min-height: 0; overflow-y: auto; overflow-x: hidden;
+}
+.ribbon button, .rb-collapse {
+  width: 34px; height: 34px; padding: 0; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: 1px solid transparent; color: var(--muted); border-radius: 6px;
+}
+.ribbon button:hover, .rb-collapse:hover { color: var(--ink); background: var(--bg); border-color: var(--line); }
+.ribbon button:focus-visible, .rb-collapse:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ribbon button:disabled { opacity: .35; background: transparent; border-color: transparent; }
+.ribbon .rb-toggle { color: var(--accent); }
+.ribbon .rb-danger:not(:disabled):hover { color: var(--danger); }
+.ribbon svg, .rb-collapse svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round;
+}
+.rb-label {
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); padding: 6px 0; cursor: pointer; user-select: none;
+}
+.rb-sep { width: 22px; height: 1px; background: var(--line); margin: 4px 0; flex: none; }
+.rb-collapse { width: 26px; height: 26px; }
+.rb-collapse svg { width: 16px; height: 16px; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; }
+/* Empty job: nothing to act on yet, so the ribbon keeps only its expand control + label. */
+body.no-modules .ribbon .rb-act,
+body.no-modules .ribbon .rb-sep { display: none; }
 .cut-scope { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; margin-bottom: 10px; }
 .cut-scope button { border: 0; background: transparent; color: var(--muted); padding: 4px 10px; cursor: pointer; font-size: 12px; }
 .cut-scope button.active { background: var(--accent); color: #2a1d02; font-weight: 600; }

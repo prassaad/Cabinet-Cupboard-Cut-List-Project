@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="brand.css" />
 </head>
-<body class="no-modules">
+<body class="no-modules cutlist-collapsed components-collapsed">
   <header class="topbar">
     <h1 id="brand-title">WallView</h1>
     <div class="top-actions">
@@ -21,9 +21,41 @@
 
   <main class="layout">
     <!-- LEFT: SIZES + COMPONENTS -->
-    <aside class="panel left">
+    <aside class="panel left" id="panel-components">
+      <!-- Collapsed ribbon: each icon clicks the real control below, so behaviour lives in one place. -->
+      <nav class="ribbon" aria-label="Components">
+        <button type="button" class="rb-toggle" data-panel="components" title="Expand Components" aria-expanded="false">
+          <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
+        <span class="rb-label">Components</span>
+        <span class="rb-sep"></span>
+        <button type="button" class="rb-act" data-proxy="btn-add-shelf" title="Add shelf">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h16"/></svg>
+        </button>
+        <button type="button" class="rb-act" data-proxy="btn-add-vertical" title="Add vertical">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M12 4v16"/></svg>
+        </button>
+        <button type="button" class="rb-act" data-proxy="btn-add-drawer" title="Add drawers">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h16M10 8h4M10 16h4"/></svg>
+        </button>
+        <span class="rb-sep"></span>
+        <button type="button" class="rb-act" data-proxy="btn-add-door" title="Door into cell">
+          <svg viewBox="0 0 24 24"><rect x="6" y="3" width="12" height="18" rx="1"/><circle cx="15" cy="12" r=".9" fill="currentColor"/></svg>
+        </button>
+        <button type="button" class="rb-act" data-proxy="btn-door-cells" data-expand="1" title="Pick cells for door">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></svg>
+        </button>
+        <span class="rb-sep"></span>
+        <button type="button" class="rb-act rb-danger" data-proxy="btn-delete" title="Delete selected">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>
+        </button>
+      </nav>
       <section class="card" id="card-components">
-        <h2>Components</h2>
+        <h2 class="panel-head">Components
+          <button type="button" class="rb-collapse" data-panel="components" title="Collapse Components" aria-label="Collapse Components">
+            <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+        </h2>
         <div class="panel-empty" id="components-empty">
           <div class="panel-empty-ico" aria-hidden="true">⊞</div>
           <p class="panel-empty-title">No module yet</p>
@@ -364,10 +396,36 @@
     </section>
 
     <!-- RIGHT: CUTLIST -->
-    <aside class="panel right">
+    <aside class="panel right" id="panel-cutlist">
+      <nav class="ribbon" aria-label="Cut list">
+        <button type="button" class="rb-toggle" data-panel="cutlist" title="Expand Cut list" aria-expanded="false">
+          <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+        <span class="rb-label">Cut list</span>
+        <span class="rb-sep"></span>
+        <button type="button" class="rb-act" data-proxy="btn-add-extra" title="Add extra piece">
+          <svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M12 8v8M8 12h8"/></svg>
+        </button>
+        <button type="button" class="rb-act" data-proxy="btn-labels" title="Labels">
+          <svg viewBox="0 0 24 24"><path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.2" fill="currentColor"/></svg>
+        </button>
+        <span class="rb-sep"></span>
+        <button type="button" class="rb-act" data-proxy="btn-export" title="Export CSV">
+          <svg viewBox="0 0 24 24"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M12 11v6M9 14l3 3 3-3"/></svg>
+        </button>
+        <button type="button" class="rb-act" data-proxy="btn-pdf" title="Export PDF">
+          <svg viewBox="0 0 24 24"><path d="M14 3H6v18h12V7z"/><path d="M14 3v4h4M9 12h6M9 15h6M9 18h4"/></svg>
+        </button>
+        <button type="button" class="rb-act" data-proxy="btn-prod" title="Production Pack">
+          <svg viewBox="0 0 24 24"><path d="M7 9V3h10v6"/><rect x="3" y="9" width="18" height="8" rx="1.5"/><path d="M7 14h10v7H7z"/></svg>
+        </button>
+      </nav>
       <section class="card grow">
         <div class="cut-head">
           <h2>Cut list</h2>
+          <button type="button" class="rb-collapse" data-panel="cutlist" title="Collapse Cut list" aria-label="Collapse Cut list">
+            <svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+          </button>
           <div class="cut-scope" id="cut-scope" role="group" aria-label="Cut list scope">
             <button id="scope-module" class="active" type="button" title="This module only">Module</button>
             <button id="scope-job" type="button" title="Whole job — all modules combined">Job</button>

@@ -1514,6 +1514,28 @@
     wireRoom();
     wireEditing();
     wirePanelDrag();
+    wireSidePanels();
+  }
+  // Cut list / Components side panels: collapsed to an icon ribbon by default (see the
+  // body classes in index.html). Ribbon icons click the real buttons, so every action
+  // keeps a single implementation; the ribbon only mirrors their disabled state.
+  function wireSidePanels() {
+    const setOpen = (name, open) => {
+      document.body.classList.toggle(name + '-collapsed', !open);
+      $$(`.rb-toggle[data-panel="${name}"]`).forEach((b) => b.setAttribute('aria-expanded', String(open)));
+      requestAnimationFrame(redraw);   // the canvas column changed width
+    };
+    $$('.rb-toggle, .rb-collapse').forEach((b) => b.onclick = () => setOpen(b.dataset.panel, b.classList.contains('rb-toggle')));
+    $$('.rb-label').forEach((l) => l.onclick = () => l.parentElement.querySelector('.rb-toggle').click());
+    $$('.rb-act').forEach((b) => {
+      const target = document.getElementById(b.dataset.proxy); if (!target) return;
+      b.onclick = () => {
+        if (b.dataset.expand) setOpen(b.closest('.panel').id.replace('panel-', ''), true);
+        target.click();
+      };
+      const sync = () => { b.disabled = target.disabled; };
+      sync(); new MutationObserver(sync).observe(target, { attributes: true, attributeFilter: ['disabled'] });
+    });
   }
   // Make the floating selection panel draggable by its header (dbl-click header = snap to corner).
   function wirePanelDrag() {
